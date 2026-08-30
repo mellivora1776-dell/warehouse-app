@@ -34,7 +34,8 @@ async function sb(path, init = {}) {
   let body = null;
   try { body = text ? JSON.parse(text) : null; } catch { body = text; }
   if (!r.ok) {
-    const msg = (body && (body.message || body.hint || body.details)) || `DB 오류 (${r.status})`;
+    let msg = (body && (body.message || body.hint || body.details)) || `DB 오류 (${r.status})`;
+    if (body && (body.code === '23505' || /duplicate key/i.test(msg))) msg = '이미 등록된 값입니다 (품번 또는 별칭 중복)';
     const err = new Error(msg);
     err.status = r.status === 404 ? 500 : 400;
     throw err;
@@ -77,7 +78,8 @@ function throttle(ip) {
 // ── 권한 (PRD 5-8-1) ────────────────────────────
 const ADMIN_ONLY = new Set([
   'outbound', 'inbound', 'counts', 'reverse', 'amend', 'editNote',
-  'productUpdate', 'productFlags', 'aliasAdd', 'aliasDelete', 'locationAdd',
+  'productCreate', 'productUpdate', 'productFlags', 'aliasAdd', 'aliasDelete',
+  'locationCreate', 'locationUpdate', 'locationReorder', 'move',
 ]);
 const LIMITED_HISTORY = new Set(['assistant', 'guest']); // 이력 조회 '제한'
 
@@ -208,6 +210,30 @@ module.exports = async function handler(req, res) {
           p_performed_by: body.performed_by ?? null,
         }) });
 
+      case 'productCreate': {
+        const b = body.product || {};
+        if (!b.code || !b.name) return res.status(400).json({ error: '품번과 품명은 반드시 필요합니다' });
+        const rows = await sb('products', {
+          method: 'POST',
+          headers: { Prefer: 'return=representation' },
+          body: JSON.stringify({
+            code: String(b.code).trim(),
+            name: String(b.name).trim(),
+            family: b.family || null,
+            item_role: b.item_role || null,
+            supply_type: b.supply_type || null,
+            stock_mode: b.stock_mode || 'physical',
+            track_qty: b.track_qty !== false,
+            spec_text: b.spec_text || null,
+            base_code: b.base_code || null,
+            std_shaft: b.std_shaft || null,
+            std_material: b.std_material || null,
+            review_note: b.review_note || null,
+          }),
+        });
+        return res.json({ product: rows[0] });
+      }
+
       case 'productUpdate':
         return res.json({ product: await rpc('update_product', {
           p_id: body.id, p_patch: body.patch, p_actor: me.id,
@@ -234,17 +260,34 @@ module.exports = async function handler(req, res) {
         await sb(`product_aliases?id=eq.${Number(body.id)}`, { method: 'DELETE' });
         return res.json({ ok: true });
 
-      case 'locationAdd':
-        return res.json({
-          rows: await sb('locations', {
-            method: 'POST',
-            headers: { Prefer: 'return=representation' },
-            body: JSON.stringify({
-              zone: body.zone, level: body.level || '바닥',
-              sort_order: Number(body.sort_order) || 0,
-            }),
-          }),
-        });
+      // 랙 자리 대량 생성 — 층 × 구역범위 × 단
+      case 'locationCreate': {
+        const out = await rpc('create_locations', { p_rows: body.rows, p_actor: me.id });
+        return res.json({ ...out, locations: await sel('locations', 'select=*&order=sort_order.asc,code.asc') });
+      }
+
+      case 'locationUpdate':
+        return res.json({ location: await rpc('update_location', {
+          p_id: body.id, p_patch: body.patch, p_actor: me.id,
+        }) });
+
+      case 'locationReorder':
+        return res.json({ changed: await rpc('reorder_locations', {
+          p_ids: body.ids, p_actor: me.id,
+        }) });
+
+      // 자리 옮기기 — 원장에 −/+ 두 줄이 남는다
+      case 'move':
+        return res.json(await rpc('move_stock', {
+          p_product_id: body.product_id,
+          p_qty: body.qty,
+          p_from_location: body.from_location,
+          p_to_location: body.to_location,
+          p_created_by: me.id,
+          p_performed_by: body.performed_by || me.id,
+          p_memo: body.memo || null,
+          p_occurred_at: body.occurred_at || new Date().toISOString(),
+        }));
 
       default:
         return res.status(400).json({ error: `알 수 없는 요청입니다 (${action})` });

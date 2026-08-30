@@ -19,7 +19,7 @@
   --warn:#8A5A00; --warn-soft:#FBF0D9;
   --danger:#95292A; --danger-soft:#FAE8E8;
   --ok:#1D6B41; --ok-soft:#E2F0E7;
-  --r:10px;
+  --r:10px; --tap:52px;
   --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
 }
@@ -77,7 +77,7 @@ input[type=text],input[type=number],input[type=search],input[type=datetime-local
 input:disabled,select:disabled{background:#F6F8F9;color:var(--muted)}
 label.f{display:block;font-size:11.5px;color:var(--muted);margin-bottom:3px}
 .field{min-width:0}
-.btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;font-size:13px;font-weight:500}
+.btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;font-size:13px;font-weight:500;min-height:40px}
 .btn:hover{border-color:var(--ink2)}
 .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn.pri:disabled{opacity:.45}
@@ -141,6 +141,38 @@ tbody tr.click:hover td{background:#F5F8F9;cursor:pointer}
 .sheet .sub-t{color:var(--muted);font-size:12px;margin-bottom:14px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:560px){.grid2{grid-template-columns:1fr}}
+/* ── 위치 피커 ── */
+#pick{position:fixed;inset:0;z-index:70;background:rgba(14,20,23,.4);display:flex;align-items:flex-end;justify-content:center}
+#pick[hidden]{display:none}
+.lp{background:#fff;border-radius:16px 16px 0 0;width:min(560px,100%);max-height:86dvh;
+  display:flex;flex-direction:column;padding:16px 14px calc(14px + env(safe-area-inset-bottom))}
+.lp h3{margin:0 0 2px;font-size:15px}
+.lp .sub-t{color:var(--muted);font-size:12px;margin-bottom:10px}
+.lp-recent{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.lp-recent button{border:1px solid var(--line);background:#fff;border-radius:99px;padding:7px 12px;font-size:12.5px}
+.lp-cols{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;flex:1;min-height:0}
+.lp-col{overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:4px;max-height:38dvh;
+  scrollbar-width:thin}
+.lp-h{font-size:11px;color:var(--muted);text-align:center;padding:4px 0 6px}
+.lp-i{display:block;width:100%;border:none;background:none;border-radius:8px;
+  min-height:var(--tap);padding:8px 6px;font-size:15px;text-align:center;color:var(--ink)}
+.lp-i[aria-pressed="true"]{background:var(--accent);color:#fff;font-weight:650}
+.lp-i.dim{color:var(--muted)}
+.lp-i small{display:block;font-size:11px;opacity:.75;font-family:var(--mono)}
+.lp-foot{display:flex;gap:8px;align-items:center;margin-top:12px}
+.lp-foot .now{flex:1;font-family:var(--mono);font-size:14px;font-weight:600}
+.lp-foot .btn{min-height:var(--tap);padding:0 18px}
+.locbtn{display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;
+  border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 10px;min-height:40px;
+  font-size:13px;text-align:left}
+.locbtn .ph{color:var(--muted)}
+.locbtn i{font-style:normal;color:var(--muted);font-size:11px}
+@media(max-width:767px){
+  .btn{min-height:var(--tap)}
+  .linkbtn{min-width:44px;min-height:44px}
+  input,select{min-height:46px;font-size:16px}
+  .locbtn{min-height:var(--tap)}
+}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:6px;align-items:center}
 .tt{background:#0E1417;color:#fff;padding:9px 15px;border-radius:99px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.2)}
 .tt.bad{background:var(--danger)}
@@ -178,6 +210,7 @@ tbody tr.click:hover td{background:#F5F8F9;cursor:pointer}
 </div>
 
 <div id="modal" hidden><div class="sheet" id="sheet"></div></div>
+<div id="pick" hidden><div class="lp" id="lpBody"></div></div>
 <div id="toast"></div>
 
 <script>
@@ -193,6 +226,9 @@ const S = {
   out:[], inb:[],          // 입력 표의 줄
   outHead:{}, inbHead:{},
   count:{loc:null, rows:[]},
+  locMap:new Map(), recent:[],
+  mv:{p:null, from:null, to:null, qty:1, memo:'', qtext:''},
+  lp:null, locDirty:false, adjLoc:null,
   pick:new Set(),          // 품목 탭 다중 선택
   hist:{rows:[], filters:{}},
 };
@@ -234,6 +270,22 @@ async function api(action, payload){
   return j;
 }
 
+const ROLE_LABEL = {admin:'Master', supervisor:'Supervisor', assistant:'Assistant', guest:'Guest'};
+
+/* ══════════ 랙 위치 표시 ══════════
+   저장 3F-a01-L1  ·  화면 3층 a01 1단                */
+const levText = lv => lv === 'L0' ? '바닥' : (/^L(\d+)$/.test(lv) ? RegExp.$1 + '단' : lv);
+const floorText = f => /^(\d+)F$/i.test(f) ? RegExp.$1 + '층' : f;
+const locById = id => S.locMap.get(Number(id));
+const locCode = id => (locById(id) || {}).code || '';
+function locLabel(id){
+  const l = locById(id);
+  return l ? `${floorText(l.floor)} ${l.zone} ${levText(l.level)}` : '';
+}
+function locSort(a, b){
+  return (a.sort_order - b.sort_order) || a.code.localeCompare(b.code);
+}
+
 /* ══════════ 품목 표시 ══════════ */
 function splitCode(p){
   const c = p.code || '';
@@ -249,7 +301,7 @@ const codeHtml = p => { const [b,s] = splitCode(p); return `<span class="code"><
 
 const lotsOf = pid => S.lots.get(pid) || [];
 const onHand = pid => lotsOf(pid).reduce((a,l) => a + l.qty, 0);
-const locName = id => (S.locations.find(l => l.id === id) || {}).code || '';
+const locName = id => locCode(id);
 
 function qtyCell(p){
   if (p.stock_mode === 'external') return '<span class="chip c-ext">미관리</span>';
@@ -351,23 +403,35 @@ async function start(){
   S.me = j.me;
   S.products = j.products; S.aliases = j.aliases; S.comps = j.components;
   S.locations = j.locations; S.users = j.users;
+  reindexLocations();
   S.byId = new Map(S.products.map(p => [p.id, p]));
   S.byCode = new Map(S.products.map(p => [p.code, p]));
-  for (const p of S.products){
-    p._alias = S.aliases.filter(a => a.product_id === p.id).map(a => a.alias);
-    p._search = norm([p.code, p.name, p.spec_text, ...p._alias].join(' '));
-    p._kids = S.comps.filter(c => c.parent_id === p.id);
-  }
+  S.products.forEach(attach);
   setInv(j.inventory);
   $('#login').style.display = 'none';
   $('#app').hidden = false;
   $('#meName').textContent = S.me.name;
-  $('#meRole').textContent = {admin:'마스터',assistant:'보조',supervisor:'주임',guest:'조회'}[S.me.role] || S.me.role;
+  $('#meRole').textContent = ROLE_LABEL[S.me.role] || S.me.role;
+  loadRecent();
   S.outHead = {reason:'출고', performed_by:S.me.id, occurred_at:localNow(), ref_no:''};
   S.inbHead = {reason:'입고', performed_by:S.me.id, occurred_at:localNow(), ref_no:''};
   S.tab = isAdmin() ? 'stock' : 'stock';
   S.sub = isAdmin() ? 'out' : 'now';
   drawTabs(); render();
+}
+function reindexLocations(){
+  S.locations.sort(locSort);
+  S.locMap = new Map(S.locations.map(l => [l.id, l]));
+}
+function loadRecent(){
+  try{ S.recent = JSON.parse(localStorage.getItem('wh_recentloc:' + S.me.id) || '[]'); }
+  catch{ S.recent = []; }
+  S.recent = S.recent.filter(id => S.locMap.has(id)).slice(0, 4);
+}
+function pushRecent(id){
+  id = Number(id);
+  S.recent = [id, ...S.recent.filter(x => x !== id)].slice(0, 4);
+  try{ localStorage.setItem('wh_recentloc:' + S.me.id, JSON.stringify(S.recent)); }catch{}
 }
 function setInv(rows){
   S.inv = rows;
@@ -376,8 +440,18 @@ function setInv(rows){
     if (!S.lots.has(r.product_id)) S.lots.set(r.product_id, []);
     S.lots.get(r.product_id).push(r);
   }
-  for (const arr of S.lots.values()) arr.sort((a,b) => locName(a.location_id).localeCompare(locName(b.location_id)));
+  for (const arr of S.lots.values())
+    arr.sort((a,b) => {
+      const la = locById(a.location_id), lb = locById(b.location_id);
+      return (la && lb) ? locSort(la, lb) : 0;
+    });
   $('#synced').textContent = '재고 ' + new Date().toTimeString().slice(0,5) + ' 기준';
+}
+function attach(p){
+  p._alias = S.aliases.filter(a => a.product_id === p.id).map(a => a.alias);
+  p._search = norm([p.code, p.name, p.spec_text, ...p._alias].join(' '));
+  p._kids = S.comps.filter(c => c.parent_id === p.id);
+  return p;
 }
 const isAdmin = () => S.me && S.me.role === 'admin';
 async function refreshInv(){ setInv((await api('inventory')).inventory); }
@@ -385,7 +459,8 @@ async function refreshInv(){ setInv((await api('inventory')).inventory); }
 /* ══════════ 탭 ══════════ */
 const TABS = [['stock','재고'],['item','품목'],['hist','이력']];
 const SUBS = {
-  stock: [['out','출고 입력','admin'],['in','입고 입력','admin'],['ct','실사','admin'],['now','재고 현황','']],
+  stock: [['out','출고 입력','admin'],['in','입고 입력','admin'],['ct','실사','admin'],
+          ['mv','자리 이동','admin'],['now','재고 현황','']],
   item:  [['list','실사 대상 관리',''],['loc','랙 위치','']],
   hist:  [],
 };
@@ -411,7 +486,8 @@ function render(){
   let html = subNav();
   if (S.tab === 'stock') html += S.sub==='out' ? viewLines('out')
                               : S.sub==='in'  ? viewLines('in')
-                              : S.sub==='ct'  ? viewCount() : viewNow();
+                              : S.sub==='ct'  ? viewCount()
+                              : S.sub==='mv'  ? viewMove() : viewNow();
   else if (S.tab === 'item') html += S.sub==='loc' ? viewLoc() : viewItems();
   else html += viewHist();
   v.innerHTML = html;
@@ -483,7 +559,6 @@ function lineRow(r, mode){
   const st = lineState(r);
   const p = r.p;
   const isOut = mode==='out';
-  const lots = p ? lotsOf(p.id) : [];
   const short = p && st.deduct && isOut && onHand(p.id) < r.q;
   const kids = p ? p._kids : [];
   const hasKids = kids.length > 0;
@@ -511,18 +586,13 @@ function lineRow(r, mode){
 
     <div class="field">
       <div class="lb">수량</div>
-      <input type="number" min="1" step="1" class="num" value="${r.q}" data-in="q#" data-uid="${r.uid}" ${r.lockQty?'disabled':''}>
+      <input type="number" min="1" step="1" class="num" value="${r.q}" data-in="q#" data-uid="${r.uid}" inputmode="numeric" ${r.lockQty?'disabled':''}>
     </div>
 
     <div class="field">
       <div class="lb">위치</div>
       ${p && (p.stock_mode!=='external' && p.track_qty && st.deduct)
-        ? `<select data-in="loc" data-uid="${r.uid}">
-             ${isOut ? `<option value="">자동(FIFO)</option>` : `<option value="">위치 선택</option>`}
-             ${(isOut ? lots.map(l => [l.location_id, `${locName(l.location_id)} · ${l.qty}`])
-                      : S.locations.filter(l=>l.is_active).map(l => [l.id, l.code]))
-                .map(([id,t]) => `<option value="${id}" ${String(r.loc)===String(id)?'selected':''}>${esc(t)}</option>`).join('')}
-           </select>`
+        ? locBtn(`data-act="loc" data-uid="${r.uid}"`, r.loc, isOut ? '자동(FIFO)' : '자리 고르기')
         : `<span class="small mut">${p ? '해당 없음' : '—'}</span>`}
     </div>
 
@@ -574,7 +644,15 @@ function drawDrop(r, q){
   const box = document.getElementById('d-'+r.uid);
   if (!box) return;
   const res = searchProducts(q);
-  if (!res.length){ box.hidden = true; box.innerHTML=''; return; }
+  if (!res.length){
+    if (isAdmin() && q.trim().length >= 2){
+      box.hidden = false;
+      box.innerHTML = `<div data-act="newitem" data-uid="${r.uid}" data-q="${esc(q.trim())}">
+        <b>${esc(q.trim())}</b> <span class="small mut">— 마스터에 없습니다</span>
+        <div class="a">+ 새 품목으로 등록하기</div></div>`;
+    } else { box.hidden = true; box.innerHTML = ''; }
+    return;
+  }
   box.hidden = false;
   box.innerHTML = res.map(([,p,al]) => `
     <div data-act="pick" data-uid="${r.uid}" data-pid="${p.id}">
@@ -615,6 +693,82 @@ function expand(r, mode){
   r.memo = wantFixed ? `출고 형태: ${r.form}` : '';
 }
 
+
+/* ══════════ ② 재고 — 자리 이동 ══════════
+   자리 이름을 바꾸는 것과 물건이 옮겨가는 것은 다른 일이다.
+   여기는 후자. 원장에 −/+ 두 줄이 남고 총 수량은 변하지 않는다. */
+function viewMove(){
+  const m = S.mv, p = m.p;
+  const have = p && m.from ? qtyAt(p.id, Number(m.from)) : null;
+  const ok = p && m.from && m.to && m.from !== m.to && m.qty > 0 && (have == null || m.qty <= have);
+  return `
+  <div class="card">
+    <h2>무엇을 옮기나요</h2>
+    <div class="field picker">
+      ${p ? `<div class="picked">${codeHtml(p)}<span class="nm">${esc(p.name)}</span>
+               <button class="linkbtn" data-act="mvclear">✕</button></div>
+             <div class="kid">${esc(lotText(p)) || '이 품목은 어느 자리에도 없습니다'}</div>`
+          : `<input type="text" placeholder="품번·품명·별칭 검색" value="${esc(m.qtext||'')}" data-in="mvq" autocomplete="off">
+             <div class="drop" id="d-mv" hidden></div>`}
+    </div>
+  </div>
+
+  ${p ? `<div class="card">
+    <div class="row-tools">
+      <div class="field" style="flex:1;min-width:150px">
+        <label class="f">보낼 자리</label>
+        ${locBtn('data-act="mvfrom"', m.from, '자리 고르기')}
+        ${have != null ? `<div class="kid">보유 ${have}개</div>` : ''}
+      </div>
+      <div class="field" style="width:96px">
+        <label class="f">수량</label>
+        <input type="number" min="1" step="1" class="num" value="${m.qty}" data-in="mvqty" inputmode="numeric">
+      </div>
+      <div class="field" style="flex:1;min-width:150px">
+        <label class="f">받을 자리</label>
+        ${locBtn('data-act="mvto"', m.to, '자리 고르기')}
+      </div>
+    </div>
+    <div class="field" style="margin-top:8px">
+      <label class="f">메모 <span class="mut">(선택)</span></label>
+      <input type="text" value="${esc(m.memo)}" placeholder="예: 창고 정리" data-in="mvmemo">
+    </div>
+    ${have != null && m.qty > have ? `<p class="small" style="color:var(--danger);margin:8px 0 0">보유 ${have}개보다 많습니다.</p>` : ''}
+    ${m.from && m.from === m.to ? `<p class="small" style="color:var(--danger);margin:8px 0 0">같은 자리입니다.</p>` : ''}
+  </div>
+
+  <div class="sticky-save">
+    <span class="small mut">${m.from && m.to ? `${locLabel(m.from)} → ${locLabel(m.to)}` : ''}</span>
+    <span class="spacer"></span>
+    <button class="btn pri" data-act="savemove" ${ok?'':'disabled'}>자리 옮기기</button>
+  </div>` : `<div class="card empty">품목을 먼저 고르세요.</div>`}`;
+}
+function drawMvDrop(q){
+  const box = document.getElementById('d-mv');
+  if (!box) return;
+  const res = searchProducts(q).filter(([,p]) => p.is_stocktake);
+  if (!res.length){ box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = res.map(([,p]) =>
+    `<div data-act="mvpick" data-pid="${p.id}">${codeHtml(p)} <span class="small">${esc(p.name)}</span>
+     <div class="small mut">${esc(lotText(p)) || '어느 자리에도 없음'}</div></div>`).join('');
+}
+async function saveMove(){
+  const m = S.mv;
+  try{
+    const j = await api('move', {
+      product_id:m.p.id, qty:Number(m.qty),
+      from_location:Number(m.from), to_location:Number(m.to),
+      memo:m.memo || null,
+    });
+    await refreshInv();
+    S.hist.loaded = false;
+    toast(`${j.qty}개를 옮겼습니다`);
+    S.mv = {p:m.p, from:null, to:null, qty:1, memo:'', qtext:''};
+    render();
+  }catch(e){ toast(e.message, true); }
+}
+
 /* ══════════ ② 재고 — 실사 ══════════ */
 function viewCount(){
   const loc = S.count.loc;
@@ -622,13 +776,9 @@ function viewCount(){
   return `
   <div class="card">
     <div class="row-tools">
-      <div class="field" style="width:190px">
+      <div class="field" style="width:210px">
         <label class="f">랙 위치</label>
-        <select data-in="ctloc">
-          <option value="">위치를 고르세요</option>
-          ${S.locations.filter(l=>l.is_active).map(l =>
-            `<option value="${l.id}" ${String(loc)===String(l.id)?'selected':''}>${esc(l.code)}</option>`).join('')}
-        </select>
+        ${locBtn('data-act="ctloc"', loc, '자리를 고르세요')}
       </div>
       <div class="field" style="flex:1;min-width:180px">
         <label class="f">실사 메모</label>
@@ -670,7 +820,7 @@ function viewCount(){
           return `<tr>
             <td>${codeHtml(p)}</td><td class="small">${esc(p.name)}</td>
             <td class="num">${r.now}</td>
-            <td><input type="number" min="0" step="1" class="num" value="${r.counted ?? ''}" data-in="ct" data-pid="${r.pid}"></td>
+            <td><input type="number" min="0" step="1" class="num" value="${r.counted ?? ''}" data-in="ct" data-pid="${r.pid}" inputmode="numeric"></td>
             <td class="num" style="${d?'font-weight:600;color:'+(d>0?'var(--ok)':'var(--danger)'):'color:var(--muted)'}">${d==null?'':(d>0?'+':'')+d}</td>
             <td style="width:34px">${r.now===0?`<button class="linkbtn" data-act="ctdel" data-pid="${r.pid}" title="줄 빼기">✕</button>`:''}</td>
           </tr>`;
@@ -770,6 +920,7 @@ function viewItems(){
       </select></div>
       ${[['all','전체'],['in','실사 대상만'],['out','제외만']].map(([k2,t]) =>
         `<button class="btn sm" data-act="itmode" data-k="${k2}" style="${itMode===k2?'background:var(--accent);color:#fff;border-color:var(--accent)':''}">${t}</button>`).join('')}
+      ${isAdmin()?`<button class="btn sm pri" data-act="newitem">+ 새 품목</button>`:''}
     </div>
     <div class="stat">
       <span>실사 대상 <b>${S.products.filter(p=>p.is_stocktake).length}</b> / 전체 ${S.products.length}</span>
@@ -810,29 +961,129 @@ function viewItems(){
   </div>`;
 }
 
-/* ══════════ ③ 품목 — 랙 위치 ══════════ */
+/* ══════════ ③ 품목 — 랙 위치 ══════════
+   구역 개수를 미리 정해두지 않는다. 창고에서 세면서 범위로 만든다. */
+let rngFloor = '3F', rngPrefix = 'a', rngFrom = 1, rngTo = 10, rngPad = 2,
+    rngLevels = ['L0','L1','L2'], locFloor = '', locShowOff = false;
+
+function rangeRows(){
+  const rows = [];
+  const from = Math.max(1, Number(rngFrom)||1), to = Math.max(from, Number(rngTo)||from);
+  for (let i = from; i <= to && rows.length < 600; i++){
+    const zone = rngPrefix + String(i).padStart(Number(rngPad)||1, '0');
+    for (const lv of rngLevels) rows.push({floor:rngFloor, zone, level:lv});
+  }
+  return rows;
+}
 function viewLoc(){
+  const floors = [...new Set(S.locations.map(l => l.floor))].sort();
+  let list = S.locations.slice();
+  if (locFloor) list = list.filter(l => l.floor === locFloor);
+  if (!locShowOff) list = list.filter(l => l.is_active);
+  const preview = rangeRows();
+  const dup = preview.filter(r => S.locations.some(l =>
+    l.floor===r.floor && l.zone===r.zone && l.level===r.level)).length;
+
   return `
+  ${isAdmin()?`<div class="card">
+    <h2>범위로 만들기</h2>
+    <div class="row-tools">
+      <div class="field" style="width:96px"><label class="f">층</label>
+        <input type="text" value="${esc(rngFloor)}" data-in="rf" placeholder="3F"></div>
+      <div class="field" style="width:86px"><label class="f">구역</label>
+        <input type="text" value="${esc(rngPrefix)}" data-in="rp" placeholder="a"></div>
+      <div class="field" style="width:80px"><label class="f">시작</label>
+        <input type="number" min="1" value="${rngFrom}" data-in="rs" inputmode="numeric"></div>
+      <div class="field" style="width:80px"><label class="f">끝</label>
+        <input type="number" min="1" value="${rngTo}" data-in="re" inputmode="numeric"></div>
+      <div class="field" style="width:90px"><label class="f">자릿수</label>
+        <select data-in="rd">${[1,2,3].map(n => `<option ${Number(rngPad)===n?'selected':''}>${n}</option>`).join('')}</select></div>
+      <div class="field" style="width:180px"><label class="f">단</label>
+        <div style="display:flex;gap:6px">
+          ${['L0','L1','L2','L3'].map(lv => `<button class="btn sm" data-act="rlv" data-v="${lv}"
+            style="${rngLevels.includes(lv)?'background:var(--accent);color:#fff;border-color:var(--accent)':''}">${levText(lv)}</button>`).join('')}
+        </div></div>
+    </div>
+    <div class="row-tools" style="margin-top:4px">
+      <span class="small mut">
+        ${preview.length ? `${esc(preview[0].floor)}-${esc(preview[0].zone)}-${esc(preview[0].level)} … ${esc(preview[preview.length-1].zone)}-${esc(preview[preview.length-1].level)}
+          · <b>${preview.length}자리</b>${dup?` (이미 있는 ${dup}자리는 건너뜁니다)`:''}` : '단을 하나 이상 고르세요'}
+      </span>
+      <span class="spacer"></span>
+      <button class="btn pri" data-act="mkloc" ${preview.length && preview.length>dup ?'':'disabled'}>만들기</button>
+    </div>
+  </div>`:''}
+
   <div class="card">
-    <h2>랙 위치 ${S.locations.length}</h2>
-    <div class="tw"><table>
-      <thead><tr><th>코드</th><th>구역</th><th>단</th><th class="num">동선 순서</th><th class="num">보관 품목</th></tr></thead>
-      <tbody>${S.locations.map(l => {
+    <div class="row-tools">
+      <h2 style="margin:0">랙 위치 ${list.length}</h2>
+      <span class="spacer"></span>
+      <select data-in="locfloor" style="width:110px">
+        <option value="">층 전체</option>
+        ${floors.map(f => `<option ${locFloor===f?'selected':''}>${esc(f)}</option>`).join('')}
+      </select>
+      <button class="btn sm" data-act="locoff" style="${locShowOff?'background:var(--accent);color:#fff;border-color:var(--accent)':''}">비활성 포함</button>
+    </div>
+    ${list.length ? `<div class="tw"><table>
+      <thead><tr><th>코드</th><th>표시</th><th class="num">동선</th><th class="num">보관</th>
+        ${isAdmin()?'<th style="width:150px">순서</th><th></th>':''}</tr></thead>
+      <tbody>${list.map((l,i) => {
         const n = S.inv.filter(r => r.location_id === l.id).length;
-        return `<tr><td><span class="code"><b>${esc(l.code)}</b></span></td><td>${esc(l.zone)}</td>
-          <td>${esc(l.level)}</td><td class="num">${l.sort_order}</td><td class="num">${n||'<span class="mut">0</span>'}</td></tr>`;
+        return `<tr${l.is_active?'':' style="opacity:.5"'}>
+          <td><span class="code"><b>${esc(l.code)}</b></span></td>
+          <td class="small">${esc(locLabel(l.id))}</td>
+          <td class="num">${l.sort_order}</td>
+          <td class="num">${n || '<span class="mut">0</span>'}</td>
+          ${isAdmin()?`<td>
+            <button class="btn sm" data-act="locup" data-id="${l.id}" ${i===0?'disabled':''}>↑</button>
+            <button class="btn sm" data-act="locdn" data-id="${l.id}" ${i===list.length-1?'disabled':''}>↓</button>
+          </td>
+          <td style="white-space:nowrap">
+            <button class="btn sm" data-act="locedit" data-id="${l.id}">수정</button>
+          </td>`:''}
+        </tr>`;
       }).join('')}</tbody>
     </table></div>
-  </div>
-  ${isAdmin()?`<div class="card">
-    <h2>위치 추가</h2>
-    <div class="row-tools">
-      <div class="field" style="width:120px"><label class="f">구역</label><input type="text" id="lzone" placeholder="a01"></div>
-      <div class="field" style="width:120px"><label class="f">단</label><input type="text" id="llevel" placeholder="바닥 / 1단"></div>
-      <div class="field" style="width:120px"><label class="f">동선 순서</label><input type="number" id="lsort" value="0"></div>
-      <button class="btn" data-act="addloc" style="align-self:end">추가</button>
+    ${isAdmin()?`<div class="row-tools" style="margin-top:10px">
+      <span class="small mut">↑↓ 로 옮긴 순서가 피킹 동선이 됩니다.</span>
+      <span class="spacer"></span>
+      <button class="btn" data-act="locsave" ${S.locDirty?'':'disabled'}>순서 저장</button>
+    </div>`:''}`
+    : `<div class="empty">등록된 자리가 없습니다.${isAdmin()?' 위에서 범위로 만드세요.':''}</div>`}
+  </div>`;
+}
+
+function swapLoc(id, dir){
+  const i = S.locations.findIndex(l => l.id === id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= S.locations.length) return;
+  [S.locations[i], S.locations[j]] = [S.locations[j], S.locations[i]];
+  S.locDirty = true;
+  render();
+}
+function modalLoc(l){
+  openModal(`
+    <h3>${esc(l.code)}</h3>
+    <div class="sub-t">${esc(locLabel(l.id))} · 보관 품목 ${S.inv.filter(r => r.location_id === l.id).length}종</div>
+    <div class="grid2">
+      <div><label class="f">층</label><input type="text" id="e_floor" value="${esc(l.floor)}"></div>
+      <div><label class="f">구역</label><input type="text" id="e_zone" value="${esc(l.zone)}"></div>
+      <div><label class="f">단</label>
+        <select id="e_level">${['L0','L1','L2','L3','L4'].map(v =>
+          `<option value="${v}" ${l.level===v?'selected':''}>${levText(v)} (${v})</option>`).join('')}</select></div>
+      <div><label class="f">동선 순서</label><input type="number" id="e_sort" value="${l.sort_order}" inputmode="numeric"></div>
+      <div><label class="f">사용 여부</label>
+        <select id="e_active"><option value="true" ${l.is_active?'selected':''}>사용</option>
+          <option value="false" ${l.is_active?'':'selected'}>비활성</option></select></div>
     </div>
-  </div>`:''}`;
+    <p class="small mut" style="margin:12px 0 0">
+      재고가 있는 자리는 이름을 바꿀 수 없습니다. 먼저 <b>재고 → 자리 이동</b>으로 옮기세요.
+      쓰지 않는 자리는 지우지 말고 비활성으로 두면 과거 이력이 남습니다.
+    </p>
+    <div class="row-tools" style="margin-top:14px"><span class="spacer"></span>
+      <button class="btn" data-act="closem">닫기</button>
+      <button class="btn pri" data-act="savelocedit" data-id="${l.id}">저장</button>
+    </div>`);
 }
 
 /* ══════════ ④ 이력 ══════════ */
@@ -898,14 +1149,140 @@ async function loadHist(){
   }catch(e){ toast(e.message, true); }
 }
 
+
+/* ══════════ 위치 피커 ══════════
+   층 → 구역 → 단 을 눌러 고른다. 자주 쓰는 자리는 위에 칩으로 둔다.
+   target: {kind:'row'|'count'|'adjust'|'mvfrom'|'mvto', uid, mode} */
+function openLocPicker(target){
+  const cur = currentLocOf(target);
+  const l = cur ? locById(cur) : null;
+  S.lp = {
+    target,
+    floor: l ? l.floor : (S.locations[0]||{}).floor,
+    zone:  l ? l.zone  : null,
+    level: l ? l.level : null,
+  };
+  $('#pick').hidden = false;
+  drawPicker();
+}
+function closePicker(){ $('#pick').hidden = true; S.lp = null; }
+
+function currentLocOf(t){
+  if (t.kind === 'row'){ const r = findRow(t.uid); return r ? r.loc : null; }
+  if (t.kind === 'count')  return S.count.loc;
+  if (t.kind === 'adjust') return S.adjLoc;
+  if (t.kind === 'mvfrom') return S.mv.from;
+  if (t.kind === 'mvto')   return S.mv.to;
+  return null;
+}
+/* 피커가 다룰 후보 자리 — 출고·이동 출발지는 재고가 있는 자리만 */
+function pickerPool(){
+  const t = S.lp.target;
+  const pid = t.productId;
+  let pool = S.locations.filter(l => l.is_active);
+  if (t.onlyStocked && pid){
+    const ids = new Set(lotsOf(pid).map(x => x.location_id));
+    pool = pool.filter(l => ids.has(l.id));
+  }
+  return pool;
+}
+function qtyAt(pid, locId){
+  if (!pid) return null;
+  const lot = lotsOf(pid).find(x => x.location_id === locId);
+  return lot ? lot.qty : 0;
+}
+function pickedLoc(){
+  const {floor, zone, level} = S.lp;
+  return pickerPool().find(l => l.floor === floor && l.zone === zone && l.level === level);
+}
+function drawPicker(){
+  const t = S.lp.target;
+  const pool = pickerPool();
+  const pid = t.productId;
+
+  const floors = [...new Set(pool.map(l => l.floor))].sort();
+  if (!floors.includes(S.lp.floor)) S.lp.floor = floors[0];
+  const zones = [...new Set(pool.filter(l => l.floor === S.lp.floor).map(l => l.zone))].sort();
+  if (!zones.includes(S.lp.zone)) S.lp.zone = zones[0] || null;
+  const levels = pool.filter(l => l.floor === S.lp.floor && l.zone === S.lp.zone)
+                     .map(l => l.level).sort();
+  if (!levels.includes(S.lp.level)) S.lp.level = levels[0] || null;
+
+  const hit = pickedLoc();
+  const recent = S.recent.map(locById).filter(l => l && pool.includes(l));
+
+  const col = (key, list, fmt) => `<div class="lp-col">${
+    list.map(v => {
+      const on = S.lp[key] === v;
+      let sub = '';
+      if (key === 'level' && pid){
+        const l2 = pool.find(x => x.floor===S.lp.floor && x.zone===S.lp.zone && x.level===v);
+        const q = l2 ? qtyAt(pid, l2.id) : null;
+        sub = q != null ? `<small>${q}</small>` : '';
+      }
+      return `<button class="lp-i${sub===`<small>0</small>`?' dim':''}" aria-pressed="${on}"
+        data-act="lpset" data-k="${key}" data-v="${esc(v)}">${esc(fmt(v))}${sub}</button>`;
+    }).join('') || '<div class="lp-h">없음</div>'}</div>`;
+
+  $('#lpBody').innerHTML = `
+    <h3>${esc(t.title || '자리 고르기')}</h3>
+    <div class="sub-t">${pid ? esc((S.byId.get(pid)||{}).code || '') + ' · ' : ''}${
+      t.onlyStocked ? '재고가 있는 자리만 나옵니다' : '층 · 구역 · 단 순서로 고르세요'}</div>
+    ${recent.length ? `<div class="lp-recent">${
+      recent.map(l => `<button data-act="lppick" data-id="${l.id}">${esc(locLabel(l.id))}${
+        pid ? ` <span class="mut">${qtyAt(pid, l.id)}</span>` : ''}</button>`).join('')}</div>` : ''}
+    <div class="lp-cols">
+      <div><div class="lp-h">층</div>${col('floor', floors, floorText)}</div>
+      <div><div class="lp-h">구역</div>${col('zone', zones, v => v)}</div>
+      <div><div class="lp-h">단</div>${col('level', levels, levText)}</div>
+    </div>
+    <div class="lp-foot">
+      <span class="now">${hit ? esc(hit.code) : '<span class="mut">고르는 중</span>'}</span>
+      ${t.clearable ? `<button class="btn" data-act="lpclear">비우기</button>` : ''}
+      <button class="btn" data-act="lpclose">취소</button>
+      <button class="btn pri" data-act="lpok" ${hit?'':'disabled'}>확인</button>
+    </div>`;
+}
+function applyLoc(id){
+  const t = S.lp.target;
+  if (id) pushRecent(id);
+  closePicker();
+  if (t.kind === 'row'){
+    const r = findRow(t.uid); if (r) r.loc = id || '';
+    render();
+  } else if (t.kind === 'count'){
+    S.count.loc = id || null;
+    if (id) loadCountRows(); else S.count.rows = [];
+    render();
+  } else if (t.kind === 'adjust'){
+    S.adjLoc = id || null;
+    const b = document.getElementById('a_locbtn');
+    if (b) b.innerHTML = locBtnInner(id, '자동(FIFO)');
+  } else if (t.kind === 'mvfrom'){
+    S.mv.from = id || null; render();
+  } else if (t.kind === 'mvto'){
+    S.mv.to = id || null; render();
+  }
+}
+function locBtnInner(id, placeholder){
+  return id
+    ? `<span>${esc(locLabel(id))}</span><i>${esc(locCode(id))}</i>`
+    : `<span class="ph">${esc(placeholder)}</span><i>▾</i>`;
+}
+function locBtn(attrs, id, placeholder){
+  return `<button class="locbtn" ${attrs}>${locBtnInner(id, placeholder)}</button>`;
+}
+
 /* ══════════ 모달 ══════════ */
 function openModal(html){ $('#sheet').innerHTML = html; $('#modal').hidden = false; }
 function closeModal(){ $('#modal').hidden = true; $('#sheet').innerHTML = ''; }
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+$('#pick').addEventListener('click', e => { if (e.target.id === 'pick') closePicker(); });
 
 /* 단건 조정 (5-4-5) */
 function modalAdjust(p){
   const lots = lotsOf(p.id);
+  S.adjLoc = null;
   openModal(`
     <h3>${splitCode(p)[0]}${splitCode(p)[1]} · 현재 ${p.is_stocktake?onHand(p.id)+'개':'수량 미추적'}</h3>
     <div class="sub-t">${esc(p.name)} ${lots.length?'· '+esc(lotText(p)):''}</div>
@@ -919,15 +1296,9 @@ function modalAdjust(p){
           <option value="반품입고">반품 입고</option>
         </select></div>
       <div><label class="f">위치</label>
-        <select id="a_loc">
-          <option value="">자동(FIFO)</option>
-          ${S.locations.filter(l=>l.is_active).map(l => {
-            const q = (lots.find(x=>x.location_id===l.id)||{}).qty;
-            return `<option value="${l.id}">${esc(l.code)}${q?` · ${q}`:''}</option>`;
-          }).join('')}
-        </select></div>
+        <button class="locbtn" id="a_locbtn" data-act="adjloc" data-pid="${p.id}">${locBtnInner(null,'자동(FIFO)')}</button></div>
       <div><label class="f"><span id="a_qlabel">수량</span></label>
-        <input type="number" id="a_qty" min="0" step="1" value="1"></div>
+        <input type="number" id="a_qty" min="0" step="1" value="1" inputmode="numeric"></div>
       <div><label class="f">작업자</label>
         <select id="a_by">${S.users.map(u => `<option value="${u.id}" ${u.id===S.me.id?'selected':''}>${esc(u.name)}</option>`).join('')}</select></div>
       <div><label class="f">발생 일시</label>
@@ -1006,17 +1377,61 @@ function modalItem(p){
     </div>`);
 }
 
+/* 새 품목 등록 */
+function modalNewItem(prefill, uid){
+  const fams = [...new Set(S.products.map(p => p.family).filter(Boolean))].sort();
+  const looksCode = /^[A-Za-z]/.test(prefill || '');
+  openModal(`
+    <h3>새 품목 등록</h3>
+    <div class="sub-t">품번은 나중에 지시서와 대조하는 유일한 열쇠입니다. 신중히 정하세요.</div>
+    <div class="grid2">
+      <div><label class="f">품번 *</label>
+        <input type="text" id="n_code" value="${esc(looksCode ? prefill : '')}" placeholder="KJ3AB-490" autocapitalize="characters"></div>
+      <div><label class="f">품명 *</label>
+        <input type="text" id="n_name" value="${esc(looksCode ? '' : (prefill||''))}" placeholder="삼상 1/2HP AL송풍기"></div>
+      <div><label class="f">제품군</label>
+        <input type="text" id="n_family" list="famlist" placeholder="송풍기 / 부품 …">
+        <datalist id="famlist">${fams.map(f => `<option value="${esc(f)}">`).join('')}</datalist></div>
+      <div><label class="f">역할</label>
+        <select id="n_role"><option value="">—</option>
+          ${['완제품','단품모터','구성부품'].map(v => `<option>${v}</option>`).join('')}</select></div>
+      <div><label class="f">공급 구분</label>
+        <select id="n_supply"><option value="">—</option>
+          ${['재고품','주문품'].map(v => `<option>${v}</option>`).join('')}</select></div>
+      <div><label class="f">재고 방식</label>
+        <select id="n_mode">
+          <option value="physical">창고 보유 — 실물을 센다</option>
+          <option value="external">미관리 — 생산창고에서 가져온다</option>
+          <option value="virtual">구성품에서 차감</option>
+        </select></div>
+      <div><label class="f">수량 추적</label>
+        <select id="n_track"><option value="true">센다</option>
+          <option value="false">세지 않는다 (충분)</option></select></div>
+      <div><label class="f">사양 메모</label><input type="text" id="n_spec" placeholder="Φ275*24*80 등"></div>
+    </div>
+    <p class="small mut" style="margin:12px 0 0">
+      품번이 없는 부품(콘덴서·흡입구 등)도 품번은 있어야 합니다. <b>400-5-콘덴서</b>처럼
+      알아볼 수 있는 값을 직접 정해 넣고, 지시서에 적히는 표기는 등록 후 <b>별칭</b>으로 붙이세요.
+      실사 대상 여부는 위 두 값(보유·추적)에서 자동으로 정해집니다.
+    </p>
+    <div class="row-tools" style="margin-top:14px"><span class="spacer"></span>
+      <button class="btn" data-act="closem">닫기</button>
+      <button class="btn pri" data-act="savenew" data-uid="${uid||''}">등록</button>
+    </div>`);
+  setTimeout(() => { const el = $(looksCode ? '#n_name' : '#n_code'); if (el) el.focus(); }, 30);
+}
+
 /* 정정 */
 function modalAmend(m){
+  S.adjLoc = null;
   openModal(`
     <h3>원장 #${m.id} 정정</h3>
     <div class="sub-t">${esc(m.code)} · ${fmtWhen(m.occurred_at)} · ${m.delta>0?'+':''}${m.delta} · ${esc(m.reason)}</div>
     <p class="small mut">원본을 취소하고 고친 값으로 다시 기록합니다. 두 기록 모두 원장에 남습니다.</p>
     <div class="grid2">
-      <div><label class="f">수량 (절대값)</label><input type="number" id="m_qty" min="1" value="${Math.abs(m.delta)}"></div>
+      <div><label class="f">수량 (절대값)</label><input type="number" id="m_qty" min="1" value="${Math.abs(m.delta)}" inputmode="numeric"></div>
       <div><label class="f">위치</label>
-        <select id="m_loc"><option value="">그대로</option>
-          ${S.locations.filter(l=>l.is_active).map(l => `<option value="${l.id}">${esc(l.code)}</option>`).join('')}</select></div>
+        <button class="locbtn" id="a_locbtn" data-act="adjloc">${locBtnInner(null,'그대로')}</button></div>
       <div><label class="f">거래처</label><input type="text" id="m_cp" value="${esc(m.counterparty||'')}"></div>
       <div><label class="f">받는사람</label><input type="text" id="m_rcv" value="${esc(m.receiver||'')}"></div>
       <div><label class="f">사양</label><input type="text" id="m_spec" value="${esc(m.spec_note||'')}"></div>
@@ -1080,6 +1495,22 @@ const ACT = {
   async save(el){ el.disabled = true; try { await saveLines(el.dataset.m); } finally { el.disabled = false; } },
   async savect(el){ el.disabled = true; try { await saveCounts(); } finally { el.disabled = false; } },
 
+  loc(el){
+    const r = findRow(el.dataset.uid); if (!r || !r.p) return;
+    const isOut = S.sub !== 'in';
+    openLocPicker({kind:'row', uid:r.uid, productId:r.p.id,
+      onlyStocked:isOut, clearable:isOut,
+      title:isOut ? '어느 자리에서 뺄까요' : '어느 자리에 넣을까요'});
+  },
+  ctloc(){ openLocPicker({kind:'count', clearable:true, title:'어느 자리를 셀까요'}); },
+  adjloc(el){ openLocPicker({kind:'adjust', productId:el.dataset.pid ? Number(el.dataset.pid) : null,
+                             clearable:true, title:'자리 고르기'}); },
+  mvpick(el){ S.mv.p = S.byId.get(Number(el.dataset.pid)); S.mv.qtext=''; S.mv.from=null; S.mv.to=null; render(); },
+  mvclear(){ S.mv = {p:null, from:null, to:null, qty:1, memo:'', qtext:''}; render(); },
+  async savemove(el){ el.disabled = true; try{ await saveMove(); } finally { el.disabled = false; } },
+  mvfrom(){ openLocPicker({kind:'mvfrom', productId:S.mv.p ? S.mv.p.id : null,
+                           onlyStocked:true, title:'어디에서 빼나요'}); },
+  mvto(){ openLocPicker({kind:'mvto', productId:S.mv.p ? S.mv.p.id : null, title:'어디로 넣나요'}); },
   nowf(el){ nowFilter = el.dataset.k; render(); },
   adjust(el){ modalAdjust(S.byId.get(Number(el.dataset.pid))); },
   async saveadj(el){ el.disabled = true; try { await saveAdjust(Number(el.dataset.pid)); } finally { el.disabled = false; } },
@@ -1105,6 +1536,33 @@ const ACT = {
     }catch(e){ toast(e.message, true); el.disabled = false; }
   },
   item(el){ modalItem(S.byId.get(Number(el.dataset.pid))); },
+  newitem(el){ modalNewItem(el.dataset.q || '', el.dataset.uid || ''); },
+  async savenew(el){
+    const product = {
+      code:$('#n_code').value.trim(), name:$('#n_name').value.trim(),
+      family:$('#n_family').value.trim(), item_role:$('#n_role').value,
+      supply_type:$('#n_supply').value, stock_mode:$('#n_mode').value,
+      track_qty:$('#n_track').value === 'true', spec_text:$('#n_spec').value.trim(),
+    };
+    if (!product.code || !product.name) return toast('품번과 품명을 적어주세요', true);
+    el.disabled = true;
+    try{
+      const {product:p} = await api('productCreate', {product});
+      S.products.push(attach(p));
+      S.products.sort((a,b) => a.code.localeCompare(b.code));
+      S.byId.set(p.id, p); S.byCode.set(p.code, p);
+      closeModal();
+      const uid = el.dataset.uid;
+      if (uid){
+        const m = S.sub === 'in' ? 'in' : 'out';
+        const r = rowsOf(m).find(x => x.uid === uid);
+        if (r){ r.p = p; r.qtext = ''; r.forceDeduct = undefined; expand(r, m); }
+      }
+      toast(`${p.code} 을(를) 등록했습니다`);
+      render();
+      if (!uid) modalItem(p);
+    }catch(e){ toast(e.message, true); el.disabled = false; }
+  },
   async saveitem(el){
     const p = S.byId.get(Number(el.dataset.pid));
     const patch = {
@@ -1145,18 +1603,50 @@ const ACT = {
       modalItem(p);
     }catch(e){ toast(e.message, true); }
   },
-  async addloc(el){
-    const zone = $('#lzone').value.trim(), level = $('#llevel').value.trim() || '바닥';
-    if (!zone) return toast('구역을 입력해주세요', true);
+  rlv(el){
+    const v = el.dataset.v;
+    rngLevels = rngLevels.includes(v) ? rngLevels.filter(x => x !== v) : [...rngLevels, v].sort();
+    render();
+  },
+  async mkloc(el){
+    const rows = rangeRows();
     el.disabled = true;
     try{
-      const {rows} = await api('locationAdd', {zone, level, sort_order:$('#lsort').value});
-      S.locations.push(rows[0]);
-      S.locations.sort((a,b) => a.sort_order - b.sort_order || a.code.localeCompare(b.code));
-      toast(`${rows[0].code} 추가`); render();
+      const j = await api('locationCreate', {rows});
+      S.locations = j.locations; reindexLocations();
+      toast(j.created ? `${j.created}자리를 만들었습니다` : '새로 만들 자리가 없었습니다');
+      render();
     }catch(e){ toast(e.message, true); el.disabled = false; }
   },
-
+  locoff(){ locShowOff = !locShowOff; render(); },
+  locedit(el){ modalLoc(locById(Number(el.dataset.id))); },
+  async savelocedit(el){
+    const id = Number(el.dataset.id);
+    const patch = {
+      floor:$('#e_floor').value.trim(), zone:$('#e_zone').value.trim(),
+      level:$('#e_level').value, sort_order:Number($('#e_sort').value) || 0,
+      is_active:$('#e_active').value === 'true',
+    };
+    el.disabled = true;
+    try{
+      const {location} = await api('locationUpdate', {id, patch});
+      Object.assign(locById(id), location);
+      reindexLocations(); closeModal();
+      toast('저장했습니다'); render();
+    }catch(e){ toast(e.message, true); el.disabled = false; }
+  },
+  locup(el){ swapLoc(Number(el.dataset.id), -1); },
+  locdn(el){ swapLoc(Number(el.dataset.id), 1); },
+  async locsave(el){
+    el.disabled = true;
+    try{
+      const ids = S.locations.map(l => l.id);
+      await api('locationReorder', {ids});
+      ids.forEach((id, i) => { locById(id).sort_order = (i+1)*10; });
+      S.locDirty = false;
+      toast('동선 순서를 저장했습니다'); render();
+    }catch(e){ toast(e.message, true); el.disabled = false; }
+  },
   loadhist(){ loadHist(); },
   async mismatch(){
     try{
@@ -1191,7 +1681,7 @@ const ACT = {
       await api('amend', {
         movement_id:id,
         qty:Number($('#m_qty').value) || null,
-        location_id:$('#m_loc').value ? Number($('#m_loc').value) : null,
+        location_id:S.adjLoc ? Number(S.adjLoc) : null,
         counterparty:$('#m_cp').value.trim() || null,
         receiver:$('#m_rcv').value.trim() || null,
         spec_note:$('#m_spec').value.trim() || null,
@@ -1220,6 +1710,13 @@ document.addEventListener('input', e => {
   const k = el.dataset.in, v = el.value;
   if (k === 'q'){ const r = findRow(el.dataset.uid); if (r){ r.qtext = v; drawDrop(r, v); } return; }
   if (k === 'ctadd'){ drawCtAdd(v); return; }
+  if (k === 'mvq'){ S.mv.qtext = v; drawMvDrop(v); return; }
+  if (k === 'mvqty'){ S.mv.qty = Math.max(1, Number(v) || 1); clearTimeout(window._t); window._t = setTimeout(render, 250); return; }
+  if (k === 'mvmemo'){ S.mv.memo = v; return; }
+  if (k === 'rf'){ rngFloor = v.trim().toUpperCase(); clearTimeout(window._t); window._t = setTimeout(render, 250); return; }
+  if (k === 'rp'){ rngPrefix = v.trim(); clearTimeout(window._t); window._t = setTimeout(render, 250); return; }
+  if (k === 'rs'){ rngFrom = v; clearTimeout(window._t); window._t = setTimeout(render, 250); return; }
+  if (k === 're'){ rngTo = v; clearTimeout(window._t); window._t = setTimeout(render, 250); return; }
   if (k === 'ctmemo'){ S.count.memo = v; return; }
   if (k === 'nowq'){ nowQ = v; clearTimeout(window._t); window._t = setTimeout(render, 200); return; }
   if (k === 'itq'){ itQ = v; clearTimeout(window._t); window._t = setTimeout(render, 200); return; }
@@ -1252,17 +1749,17 @@ document.addEventListener('change', e => {
   if (!el) return;
   const k = el.dataset.in, v = el.value;
   if (k === 'head'){ headOf(el.dataset.m)[el.dataset.f] = v; return; }
-  if (k === 'ctloc'){ S.count.loc = v; if (v) loadCountRows(); else S.count.rows = []; render(); return; }
   if (k === 'ctfam'){ S.count.fam = v; render(); return; }
   if (k === 'itfam'){ itFam = v; render(); return; }
   if (k === 'itrole'){ itRole = v; render(); return; }
+  if (k === 'rd'){ rngPad = Number(v); render(); return; }
+  if (k === 'locfloor'){ locFloor = v; render(); return; }
   if (k === 'hdays'){ S.hist.filters.days = Number(v); return; }
   if (k === 'hreason'){ S.hist.filters.reason = v; return; }
   if (k === 'hcode'){ S.hist.filters.code = v; return; }
   const r = findRow(el.dataset.uid);
   if (!r) return;
-  if (k === 'loc') r.loc = v;
-  else if (k === 'form'){ r.form = v; expand(r, S.sub==='in'?'in':'out'); render(); }
+  if (k === 'form'){ r.form = v; expand(r, S.sub==='in'?'in':'out'); render(); }
 });
 
 /* 실사 — 품목 추가 드롭다운 */
@@ -1365,7 +1862,7 @@ async function saveCounts(){
 async function saveAdjust(pid){
   const reason = $('#a_reason').value;
   const qty = Number($('#a_qty').value);
-  const loc = $('#a_loc').value ? Number($('#a_loc').value) : null;
+  const loc = S.adjLoc ? Number(S.adjLoc) : null;
   const at = new Date($('#a_at').value).toISOString();
   const by = Number($('#a_by').value);
   const common = {counterparty:$('#a_cp').value.trim() || null, receiver:$('#a_rcv').value.trim() || null,

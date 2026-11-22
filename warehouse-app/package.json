@@ -1,0 +1,23 @@
+{
+  "name": "warehouse-stock-master",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test tests/calculation.test.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.119.2",
+    "lucide-react": "^0.545.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.0"
+  }
+}

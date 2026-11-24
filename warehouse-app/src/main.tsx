@@ -10,13 +10,15 @@ import {
   ShieldCheck,
   LockKeyhole,
   ListOrdered,
-  ChevronDown,
+  ClipboardCheck,
+  Truck,
+  Files,
+  ListChecks,
 } from 'lucide-react'
 import { db, rpc, message, type Item } from './db'
 import {
   Brand,
   SearchBox,
-  History,
   Status,
   Refresh,
   Empty,
@@ -26,7 +28,13 @@ import {
 } from './ui'
 import { Detail } from './Detail'
 import { Staff } from './Staff'
+import { Daily, Picking } from './workflow/Day'
+import { Intake } from './workflow/Intake'
+import { Ledger } from './workflow/Ledger'
+import { today } from './workflow/model'
+import { Sheet } from './workflow/shared'
 import './style.css'
+import './workflow/workflow.css'
 
 function Login() {
   const [pin, setPin] = useState(''),
@@ -156,7 +164,16 @@ function Inventory({
         </div>
         {p.rows.map((r) => (
           <button key={r.id} className="stock-row" onClick={() => open(r.id)}>
-            <span className="item-name">{r.name}</span>
+            <span className="item-name">
+              {r.name}
+              {(r.spec || (r.sku && r.sku !== r.name)) && (
+                <small className="sku-caption">
+                  {[r.sku !== r.name ? r.sku : null, r.spec]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </small>
+              )}
+            </span>
             <span className={'qty ' + (r.qty === null ? 'unknown' : '')}>
               {r.qty === null ? (
                 '미확인'
@@ -184,46 +201,6 @@ function Inventory({
         />
       )}
       <PageEnd page={p} />
-    </>
-  )
-}
-function Ledger({ version }: { version: number }) {
-  const [s, setS] = useState(''),
-    [kind, setKind] = useState(''),
-    [refresh, setRefresh] = useState(0)
-  const q = useDebounce(s)
-  return (
-    <>
-      <div className="title-row">
-        <h1>입출고 기록</h1>
-        <Refresh onClick={() => setRefresh((x) => x + 1)} />
-      </div>
-      <div className="filters">
-        <SearchBox
-          value={s}
-          onChange={setS}
-          placeholder="품번 또는 품목명 검색"
-        />
-        <div className="select">
-          <select
-            aria-label="작업 종류"
-            value={kind}
-            onChange={(e) => setKind(e.target.value)}
-          >
-            <option value="">전체 작업</option>
-            <option value="in">입고</option>
-            <option value="out">출고</option>
-            <option value="count">실사 조정</option>
-            <option value="opening">시작 재고</option>
-          </select>
-          <ChevronDown size={16} />
-        </div>
-      </div>
-      <div className="list-meta">
-        <span>변경 기록</span>
-        <span>최신순 · 한국 시간</span>
-      </div>
-      <History query={q} kind={kind} version={version + refresh} />
     </>
   )
 }
@@ -255,6 +232,39 @@ function Home({ user }: { user: User }) {
       live = false
     }
   }, [user.id, check])
+  const [day, setDay] = useState(today),
+    [openDays, setOpenDays] = useState<string[]>([])
+  useEffect(() => {
+    let active = true
+    if (role === 'admin')
+      rpc<string[]>('wm2_open_days')
+        .then((d) => {
+          if (active) setOpenDays(d)
+        })
+        .catch((e) => {
+          if (active) setSignError(message(e))
+        })
+    return () => {
+      active = false
+    }
+  }, [role])
+  const menu = [
+    ['stock', '재고 조회', Boxes],
+    ['picking', '피킹리스트', ListChecks],
+    ['daily', '일일 마감', ClipboardCheck],
+    ['history', '입출고 기록', HistoryIcon],
+    ['sales', '영업출고 조회', Truck],
+    ...(role === 'admin'
+      ? [
+          ['intake', '분석 자료 등록', Files],
+          ['staff', '직원 권한', ShieldCheck],
+        ]
+      : []),
+  ]
+  const go = (id: string) => {
+    setSection(id)
+    window.scrollTo(0, 0)
+  }
   async function logout() {
     const r = await db!.auth.signOut({ scope: 'local' })
     if (r.error) setSignError('로그아웃하지 못했습니다. 다시 시도해 주세요.')
@@ -277,13 +287,7 @@ function Home({ user }: { user: User }) {
         </div>
         {role && (
           <nav aria-label="주 메뉴">
-            {[
-              ['stock', '재고 조회', Boxes],
-              ['history', '입출고 기록', HistoryIcon],
-              ...(role === 'admin'
-                ? [['staff', '직원 권한', ShieldCheck]]
-                : []),
-            ].map(([id, title, Icon]) => {
+            {menu.map(([id, title, Icon]) => {
               const I = Icon as typeof Boxes
               return (
                 <button
@@ -301,6 +305,21 @@ function Home({ user }: { user: User }) {
               )
             })}
           </nav>
+        )}
+        {role && (
+          <div className="mobile-worknav">
+            <select
+              aria-label="업무 메뉴"
+              value={section}
+              onChange={(e) => go(e.target.value)}
+            >
+              {menu.map(([id, title]) => (
+                <option key={String(id)} value={String(id)}>
+                  {String(title)}
+                </option>
+              ))}
+            </select>
+          </div>
         )}
         <div className="account">
           <div className="avatar">
@@ -341,10 +360,43 @@ function Home({ user }: { user: User }) {
           <Inventory version={ver} ready={ready} open={setSelected} />
         ) : section === 'staff' && role === 'admin' ? (
           <Staff />
+        ) : section === 'daily' ? (
+          <Daily day={day} setDay={setDay} admin={role === 'admin'} />
+        ) : section === 'picking' ? (
+          <Picking day={day} setDay={setDay} admin={role === 'admin'} />
+        ) : section === 'intake' && role === 'admin' ? (
+          <Intake day={day} setDay={setDay} />
         ) : (
-          <Ledger version={ver} />
+          <Ledger
+            key={section}
+            version={ver}
+            sales={section === 'sales'}
+            admin={role === 'admin'}
+          />
         )}
       </main>
+      {openDays.length > 0 && role === 'admin' && (
+        <Sheet title="미마감 내역" close={() => setOpenDays([])}>
+          <h2>검토할 날짜</h2>
+          {openDays.map((d) => (
+            <button
+              key={d}
+              className="issue-row"
+              onClick={() => {
+                setDay(d)
+                go('daily')
+                setOpenDays([])
+              }}
+            >
+              {d}
+              <ChevronRight size={16} />
+            </button>
+          ))}
+          <button className="quiet close-later" onClick={() => setOpenDays([])}>
+            나중에 확인
+          </button>
+        </Sheet>
+      )}
       {selected && (
         <Detail
           key={selected}

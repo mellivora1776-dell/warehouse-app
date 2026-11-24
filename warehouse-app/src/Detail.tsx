@@ -15,7 +15,9 @@ import {
   type Change,
 } from './db'
 import { preview, quantity, operation } from './calc.mjs'
-import { History, Status } from './ui'
+import { Status } from './ui'
+import { Ledger } from './workflow/Ledger'
+import { ManualForm } from './workflow/ManualForm'
 type Props = {
   id: string
   user: string
@@ -111,6 +113,11 @@ export function Detail({ id, user, admin, close, saved }: Props) {
         ) : (
           <>
             <h2 className="item-title">{info.name}</h2>
+            {(info.sku || info.spec) && (
+              <p className="small-meta">
+                {[info.sku, info.spec].filter(Boolean).join(' · ')}
+              </p>
+            )}
             <div className="balance">
               <span>현재고</span>
               <strong>
@@ -139,7 +146,7 @@ export function Detail({ id, user, admin, close, saved }: Props) {
               <h3>변경 기록</h3>
               <span>한국 시간</span>
             </div>
-            <History itemId={id} version={sequence} />
+            <Ledger admin={admin} itemId={id} version={sequence} />
           </>
         )}
       </div>
@@ -159,7 +166,8 @@ function Editor({
   const storageKey = 'wm-pending:' + user + ':' + item.id
   const [pending, setPending] = useState<Change | null>(() => {
     try {
-      return JSON.parse(sessionStorage.getItem(storageKey) || 'null')
+      const previous = JSON.parse(sessionStorage.getItem(storageKey) || 'null')
+      return previous?.p_kind === 'count' ? previous : null
     } catch {
       return null
     }
@@ -223,94 +231,98 @@ function Editor({
   return (
     <section className="editor">
       <h3>수량 변경</h3>
-      <form onSubmit={submit}>
-        <div className="mode-group" aria-label="작업 종류">
-          {modes.map(([k, label, Icon]) => (
-            <button
-              type="button"
-              aria-pressed={kind === k}
-              disabled={
-                !!pending || busy || (k !== 'count' && item.qty === null)
-              }
-              className={kind === k ? 'selected' : ''}
-              key={k}
-              onClick={() => {
-                setKind(k)
-                setInput('')
-                setErr('')
-              }}
-            >
-              <Icon size={16} />
-              {label}
-            </button>
-          ))}
-        </div>
-        {item.qty === null && (
-          <p className="help">
-            시작 수량이 미확인입니다. 처음 한 번은 직접 센 수량을 등록해 주세요.
-          </p>
-        )}
-        <label>
-          {inputLabel[kind]}
-          <div className="number-field">
-            <input
-              type="text"
-              inputMode="numeric"
-              autoComplete="off"
-              value={input}
-              disabled={!!pending || busy}
-              placeholder="수량 입력"
-              onChange={(e) => setInput(e.target.value)}
-            />
-            <span>대</span>
-          </div>
-        </label>
-        <label>
-          메모 <span className="optional">선택</span>
-          <input
+
+      <div className="mode-group" aria-label="작업 종류">
+        {modes.map(([k, label, Icon]) => (
+          <button
+            type="button"
+            aria-pressed={kind === k}
             disabled={!!pending || busy}
-            value={memo}
-            maxLength={1000}
-            placeholder="변경 사유 또는 참고 사항"
-            onChange={(e) => setMemo(e.target.value)}
-          />
-        </label>
-        {pending ? (
-          <Status>
-            저장 요청 {operation[pending.p_kind]} {quantity(pending.p_amount)} ·
-            처리 결과 확인 중
-          </Status>
-        ) : (
-          <div
-            className={'preview ' + (result.error ? 'invalid' : '')}
-            aria-live="polite"
+            className={kind === k ? 'selected' : ''}
+            key={k}
+            onClick={() => {
+              setKind(k)
+              setInput('')
+              setErr('')
+            }}
           >
-            {result.error ?? (
-              <>
-                현재 {quantity(item.qty)} <span>→</span> 저장 후{' '}
-                <b>
-                  {result.after !== undefined ? quantity(result.after) : '—'}
-                </b>
-              </>
-            )}
-          </div>
-        )}
-        {err && (
-          <p className="error" role="alert">
-            {err}
-          </p>
-        )}
-        <button
-          className="primary"
-          disabled={busy || (!pending && result.after === undefined)}
-        >
-          {busy
-            ? '저장 중…'
-            : pending
-              ? '같은 요청 다시 확인'
-              : (kind === 'count' ? '실사 수량' : operation[kind]) + ' 저장'}
-        </button>
-      </form>
+            <Icon size={16} />
+            {label}
+          </button>
+        ))}
+      </div>
+      {kind !== 'count' ? (
+        <ManualForm key={kind} item={item} flow={kind} onSaved={() => {}} />
+      ) : (
+        <form onSubmit={submit}>
+          {item.qty === null && (
+            <p className="help">
+              시작 수량이 미확인입니다. 처음 한 번은 직접 센 수량을 등록해
+              주세요.
+            </p>
+          )}
+          <label>
+            {inputLabel[kind]}
+            <div className="number-field">
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                value={input}
+                disabled={!!pending || busy}
+                placeholder="수량 입력"
+                onChange={(e) => setInput(e.target.value)}
+              />
+              <span>대</span>
+            </div>
+          </label>
+          <label>
+            메모 <span className="optional">선택</span>
+            <input
+              disabled={!!pending || busy}
+              value={memo}
+              maxLength={1000}
+              placeholder="변경 사유 또는 참고 사항"
+              onChange={(e) => setMemo(e.target.value)}
+            />
+          </label>
+          {pending ? (
+            <Status>
+              저장 요청 {operation[pending.p_kind]} {quantity(pending.p_amount)}{' '}
+              · 처리 결과 확인 중
+            </Status>
+          ) : (
+            <div
+              className={'preview ' + (result.error ? 'invalid' : '')}
+              aria-live="polite"
+            >
+              {result.error ?? (
+                <>
+                  현재 {quantity(item.qty)} <span>→</span> 저장 후{' '}
+                  <b>
+                    {result.after !== undefined ? quantity(result.after) : '—'}
+                  </b>
+                </>
+              )}
+            </div>
+          )}
+          {err && (
+            <p className="error" role="alert">
+              {err}
+            </p>
+          )}
+          <button
+            className="primary"
+            disabled={busy || (!pending && result.after === undefined)}
+          >
+            {busy
+              ? '저장 중…'
+              : pending
+                ? '같은 요청 다시 확인'
+                : (kind === 'count' ? '실사 수량' : operation[kind]) + ' 저장'}
+          </button>
+        </form>
+      )}
     </section>
   )
 }

@@ -4,9 +4,11 @@ export type Item = {
   id: string
   name: string
   qty: number | null
+  sku?: string | null
+  spec?: string | null
   ordinal: number
 }
-export type Detail = Pick<Item, 'id' | 'name' | 'qty'> & {
+export type Detail = Pick<Item, 'id' | 'name' | 'qty' | 'sku' | 'spec'> & {
   revision: number
   racks: string[]
 }
@@ -76,6 +78,30 @@ export function message(err: unknown): string {
         return '현재고가 부족합니다.'
       }
     }
+    Object.assign(msg, {
+      WM2_FILE_USED: '이 파일은 이미 다른 문서에 연결되어 있습니다.',
+      WM2_USE_CLOSE: '입출고는 일일 마감에서 승인해 주세요.',
+      WM2_DOCUMENT_CONFLICT:
+        '같은 문서 ID로 다른 내용이 등록돼 있습니다. 수정본에는 새 문서 ID와 이전 문서 ID를 입력해 주세요.',
+      WM2_MANUAL_ONLY: '반품과 AS는 관리자 수기 전표로 등록해 주세요.',
+      WM2_EMPTY: '새로 마감할 거래 또는 검토 내용이 없습니다.',
+      WM2_DIRECTION: '재고가 늘었는지 줄었는지 선택해 주세요.',
+      WM2_REVIEW_FIRST:
+        '미검토 거래와 수정본 후보를 확인하거나 보류·제외해 주세요.',
+      WM2_LINE: '행 식별자, 원문 품명, 수량이나 신뢰도를 확인해 주세요.',
+      WM2_METHOD: '영업출고 방식은 직납·화물·방문 중에서 선택해 주세요.',
+      WM2_FORMAT: '문서 형식, 날짜, 버전, 파일 지문을 확인해 주세요.',
+      WM2_INCOMPLETE: 'SKU, 수량, 영업출고 거래처와 방식을 확인해 주세요.',
+      WM2_REASON: '보류·제외 또는 정정 사유를 입력해 주세요.',
+      WM2_SKU_EXISTS:
+        '같은 SKU 또는 이름과 사양이 등록돼 있습니다. 기존 품목을 검색해 연결해 주세요.',
+      WM_STALE:
+        '다른 작업으로 자료 또는 재고가 바뀌었습니다. 최신 화면에서 다시 검토해 주세요.',
+    })
+    if (err.code === '23505')
+      return '중복된 식별자가 있습니다. 문서와 행 ID를 확인해 주세요.'
+    if (['22003', '22P02', '22007', '22008', '23514'].includes(err.code))
+      return '날짜, 정수 수량 또는 입력 형식을 확인해 주세요.'
     if (msg[err.serverMessage]) return msg[err.serverMessage]
   }
   return '데이터를 확인할 수 없습니다. 연결 상태를 확인하고 다시 시도해 주세요.'

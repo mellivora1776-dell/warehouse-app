@@ -1,0 +1,299 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "재고 마스터 미승인 자료 등록",
+    "version": "2.0.0",
+    "description": "관리자 승인을 기다리는 분석 자료를 저장합니다. 현재고는 변경되지 않습니다."
+  },
+  "servers": [
+    {
+      "url": "https://warehouse-app-wine.vercel.app"
+    }
+  ],
+  "paths": {
+    "/api/intake": {
+      "post": {
+        "operationId": "submitWarehouseDocument",
+        "summary": "분석한 문서 한 버전을 검토 대상으로 등록",
+        "description": "사용자가 등록을 요청했고 출고 건의 관계가 확인된 경우에만 호출한다. 같은 파일·문서의 재전송은 한 건으로 처리된다. 반품·AS는 수기 등록한다.",
+        "x-openai-isConsequential": true,
+        "security": [
+          {
+            "intakeKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Document"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "기존 문서",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "document": {
+                      "type": "string",
+                      "description": "문서 UUID"
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "검토 상태"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    },
+                    "stock_posted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "미승인 문서 등록",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "document": {
+                      "type": "string",
+                      "description": "문서 UUID"
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "검토 상태"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    },
+                    "stock_posted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요"
+          },
+          "403": {
+            "description": "키가 만료되었거나 유효하지 않음"
+          },
+          "409": {
+            "description": "같은 ID의 내용이 다름"
+          },
+          "422": {
+            "description": "입력 형식 확인 필요"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "intakeKey": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "Document": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "document_id",
+          "document_type",
+          "version",
+          "work_date",
+          "category",
+          "lines"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "document_id": {
+            "type": "string",
+            "description": "이 원본 버전의 고유 식별자. 동일 전송 시 재사용",
+            "maxLength": 160
+          },
+          "case_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "거래처·날짜와 별도로 확인된 출고번호 또는 생산 작업 고유 ID. 미확정은 null"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 999999
+          },
+          "is_revision": {
+            "type": "boolean"
+          },
+          "replaces": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "직전 버전의 document_id"
+          },
+          "document_type": {
+            "type": "string",
+            "description": "출고지시서, 출고의뢰서, 생산입고 메시지 등"
+          },
+          "work_date": {
+            "type": "string",
+            "format": "date",
+            "description": "한국 시간 작업일"
+          },
+          "source_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "시간대가 포함된 원본 ISO 시각"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "production_in",
+              "production_out",
+              "sale"
+            ]
+          },
+          "customer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "원문 거래처명"
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "직납",
+              "화물",
+              "방문",
+              null
+            ]
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "카카오톡 메시지 또는 원본 문서 종류"
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "분석의 근거가 된 원문"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "실제 원본 파일명"
+              },
+              "sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "실제 파일 바이트로 계산할 수 있을 때만 기입"
+              }
+            }
+          },
+          "lines": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 200,
+            "items": {
+              "type": "object",
+              "required": [
+                "line_id",
+                "raw_name",
+                "qty"
+              ],
+              "properties": {
+                "line_id": {
+                  "type": "string",
+                  "description": "같은 건의 수정 전후 같은 품목 행에 유지하는 ID",
+                  "maxLength": 160
+                },
+                "raw_name": {
+                  "type": "string",
+                  "description": "원문 품목명",
+                  "maxLength": 600
+                },
+                "sku": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "확실한 마스터 SKU 또는 품목 UUID"
+                },
+                "spec": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "원문 전체 사양과 주문 조건"
+                },
+                "qty": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 1,
+                  "maximum": 2147483647
+                },
+                "confidence": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "review_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "판독 불확실 사유"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

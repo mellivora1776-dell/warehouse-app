@@ -42,7 +42,7 @@ export function Review({
     [name, setName] = useState(row.raw_name),
     [spec, setSpec] = useState(row.spec),
     [racks, setRacks] = useState(''),
-    [first, setFirst] = useState(true),
+    [first, setFirst] = useState(''),
     [ordered, setOrdered] = useState(true),
     [checked, setChecked] = useState(false)
   const reconcile = row.doc_status === 'reconcile'
@@ -108,7 +108,7 @@ export function Review({
                   .map((s) => s.trim())
                   .filter(Boolean),
                 p_ordered: ordered,
-                p_first_receipt: first,
+                p_first_receipt: first === 'zero',
               })
               complete()
             })
@@ -155,18 +155,22 @@ export function Review({
             />
             주문품으로 관리
           </label>
-          <label className="checklabel">
-            <input
-              type="checkbox"
-              checked={first}
-              onChange={(e) => setFirst(e.target.checked)}
-            />
-            최초 거래로, 이전 재고는 0개입니다
+          <label>
+            등록 전 재고
+            <select
+              required
+              value={first}
+              onChange={(e) => setFirst(e.target.value)}
+            >
+              <option value="">이전 재고 확인</option>
+              <option value="zero">이전 재고 0개 확인</option>
+              <option value="unknown">이전 재고 미확인</option>
+            </select>
           </label>
           <p className="help">
-            {first
-              ? '자료의 입고 수량은 일일 마감 때 한 번 반영됩니다.'
-              : '이전 수량을 미확인으로 등록합니다. 마감 전 실사가 필요합니다.'}
+            {first === 'unknown'
+              ? '마감 전에 직접 센 수량을 입력하세요.'
+              : '자료의 입고 수량은 일일 마감 승인 때 반영됩니다.'}
           </p>
           <label className="checklabel">
             <input

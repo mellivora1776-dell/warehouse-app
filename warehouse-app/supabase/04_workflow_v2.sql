@@ -166,8 +166,12 @@ begin
     n.item_id is not distinct from o.item_id and n.raw_name=o.raw_name and n.spec=o.spec and n.raw_sku=o.raw_sku,
     pick_changed=o.picked and (n.read_qty,n.item_id,n.raw_name,n.spec,n.raw_sku) is distinct from
                               (o.final_qty,o.item_id,o.raw_name,o.spec,o.raw_sku),
-    decision=case when o.decision in ('hold','exclude') then o.decision else 'pending' end,
-    reason=case when o.decision in ('hold','exclude') then o.reason else n.reason end
+    decision=case when o.decision in ('hold','exclude') and
+      (n.raw_name,n.raw_sku,n.spec,n.read_qty,n.customer,n.method) is not distinct from
+      (o.raw_name,o.raw_sku,o.spec,o.final_qty,o.customer,o.method) then o.decision else 'pending' end,
+    reason=case when o.decision in ('hold','exclude') and
+      (n.raw_name,n.raw_sku,n.spec,n.read_qty,n.customer,n.method) is not distinct from
+      (o.raw_name,o.raw_sku,o.spec,o.final_qty,o.customer,o.method) then o.reason else n.reason end
   from work_lines o where n.document_id=doc_id and o.document_id=prior.id and n.line_key=o.line_key;
   update work_documents set status='previous' where case_id=job_id and status in ('current','reconcile');
  end if;

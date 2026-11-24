@@ -329,6 +329,25 @@ class Workflow(unittest.TestCase):
         self.approve(day)
         self.assertFalse(self.read(day)["rows"][0]["entry_id"])
 
+    def test_changed_excluded_line_requires_fresh_review(self):
+        day = "2031-01-09"
+        doc = self.doc(day, "QA-21", 3)
+        self.call("wm2_import", doc)
+        self.review(self.read(day)["rows"][0], "exclude", reason="원지시 취소")
+        same = {**doc, "version": 2, "document_id": uuid.uuid4().hex}
+        self.call("wm2_import", same)
+        self.assertEqual(self.read(day)["rows"][0]["decision"], "exclude")
+        changed = {
+            **doc,
+            "version": 3,
+            "document_id": uuid.uuid4().hex,
+            "lines": [{"line_id": "A", "raw_name": "QA-21", "qty": 1}],
+        }
+        self.call("wm2_import", changed)
+        self.assertEqual(self.read(day)["rows"][0]["decision"], "pending")
+        self.assertIn("WM2_REVIEW_FIRST", self.approve(day, True))
+        self.assertEqual(self.qty("QA-21"), 40)
+
     def test_order_candidate_and_reorder(self):
         day = "2031-01-04"
         name = "신규 QA 모터"

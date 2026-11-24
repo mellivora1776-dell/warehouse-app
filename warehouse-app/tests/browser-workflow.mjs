@@ -109,6 +109,7 @@ try {
     root,
     logLevel: 'warn',
     define: {
+      'process.env.NODE_ENV': JSON.stringify('production'),
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(sb),
       'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(
         config.anon,
@@ -140,8 +141,9 @@ try {
       headers: headers(token),
       body: JSON.stringify(args),
     })
-    const b = await r.json()
-    assert.ok(r.ok, JSON.stringify({ name, error: b.message }))
+    const raw = await r.text()
+    const b = raw ? JSON.parse(raw) : null
+    assert.ok(r.ok, JSON.stringify({ name, error: b?.message }))
     return b
   }
   const item = (await rpc('wm_items', { p_query: '검증용' })).rows.find(
@@ -299,6 +301,8 @@ try {
   await dialog.getByRole('button', { name: '검토 저장' }).click()
   await dialog.waitFor({ state: 'hidden' })
   await card.getByText('예상 현재고 7개').waitFor()
+  if (process.env.WM_QA_REVIEW_PNG)
+    await a.screenshot({ path: process.env.WM_QA_REVIEW_PNG, fullPage: true })
   await fits(a)
   const stock = s.getByRole('button', { name: new RegExp(item.name) })
   await stock.waitFor()

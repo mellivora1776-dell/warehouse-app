@@ -14,7 +14,45 @@ import {
 import { Evidence } from './Evidence'
 import { statuses, type Issue } from './model'
 
-type IntakeResult = { id: string; duplicate: boolean; status: string }
+type PlanLine = {
+  line_id: string
+  raw_name: string
+  raw_spec: string
+  item_id: string | null
+  standard_name: string
+  standard_spec: string
+  pick_qty: number | null
+  stock_qty: number | null
+  method: string | null
+  method_raw: string | null
+  customer: string
+  reason: string
+  resolution: string
+}
+type Preview = {
+  can_submit: boolean
+  stamp: string
+  blockers: string[]
+  lines: PlanLine[]
+  duplicate: boolean
+  status: string
+}
+type IntakeResult = {
+  id: string
+  duplicate: boolean
+  status: string
+  already_closed?: boolean
+  verified: boolean
+  stored_lines: PlanLine[]
+}
+const resolutionLabels: Record<string, string> = {
+  matched: '품목 연결',
+  pick_only: '피킹 전용',
+  reference: '원문 보관',
+  unlinked: '품목 연결 필요',
+  order_candidate: '신규 주문품 후보',
+  conflict: '입력 충돌',
+}
 function Connection() {
   const result = useData<{ enabled: boolean }>('wm2_key', {
       p_action: 'status',
@@ -123,9 +161,17 @@ export function Intake({
     [view, setView] = useState<Issue | null>(null)
   const [fileInputKey, setFileInputKey] = useState(0)
   const input = useRef<HTMLTextAreaElement>(null)
+  const [preview, setPreview] = useState<Preview | null>(null)
+  const version = useRef(0)
+  function invalidate() {
+    version.current++
+    setPreview(null)
+    setReceived(null)
+  }
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     await task.run(async () => {
+      const start = version.current
       let doc
       try {
         doc = JSON.parse(raw)
@@ -147,15 +193,35 @@ export function Intake({
           ).join('')
         if (doc.source?.sha256 && doc.source.sha256.toLowerCase() !== hash)
           throw new Error('원본 파일이 JSON의 파일 지문과 다릅니다.')
-        const sha = await uploadFile(file)
+        if (file.size > 3 * 1024 * 1024)
+          throw new Error('원본 파일은 3MB 이하여야 합니다.')
         doc.source = {
           ...doc.source,
-          sha256: sha,
+          sha256: hash,
           name: doc.source?.name || file.name,
         }
       }
-      const record = await rpc<IntakeResult>('wm2_import', { p_doc: doc })
+      if (start !== version.current) return
+      if (!preview) {
+        const checked = await rpc<Preview>('wm3_preview', { p_doc: doc })
+        if (start === version.current) setPreview(checked)
+        return
+      }
+      if (!preview.can_submit) return
+      setPreview(null)
+      if (file) await uploadFile(file)
+      if (start !== version.current) return
+      const record = await rpc<IntakeResult>('wm2_import', {
+        p_doc: { ...doc, preview_stamp: preview.stamp },
+      })
       setReceived(record)
+      if (
+        !record.verified ||
+        record.stored_lines?.length !== preview.lines.length
+      )
+        throw new Error(
+          '기존 저장 결과가 사전 검증과 다릅니다. 등록한 버전에서 거래 검토 내역을 확인하세요.',
+        )
       setDay(doc.work_date)
       result.reload()
       setRaw('')
@@ -180,7 +246,10 @@ export function Intake({
             className="json-input"
             rows={6}
             value={raw}
-            onChange={(e) => setRaw(e.target.value)}
+            onChange={(e) => {
+              invalidate()
+              setRaw(e.target.value)
+            }}
             required
             placeholder="ChatGPT의 분석 결과를 붙여넣으세요."
           />
@@ -199,6 +268,7 @@ export function Intake({
                       throw new Error(
                         'JSON 파일은 250KB까지 등록할 수 있습니다.',
                       )
+                    invalidate()
                     setRaw(await f.text())
                     input.current?.focus()
                   })
@@ -210,7 +280,10 @@ export function Intake({
             <input
               type="file"
               accept="image/jpeg,image/png,image/webp,application/pdf"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => {
+                invalidate()
+                setFile(e.target.files?.[0] ?? null)
+              }}
             />
           </label>
         </div>
@@ -218,17 +291,60 @@ export function Intake({
           문서 한 버전 전체를 등록하세요. 원본은 JPG·PNG·WebP·PDF 중 3MB까지
           첨부할 수 있습니다.
         </p>
+        {preview && (
+          <section className="preview-lines" aria-live="polite">
+            <h3>사전 검증 · {preview.lines.length}행</h3>
+            {preview.blockers.map((b, i) => (
+              <p className="issue-text" key={i}>
+                {b}
+              </p>
+            ))}
+            {preview.lines.map((l) => (
+              <div className="compare-line" key={l.line_id}>
+                <b>
+                  {l.standard_name} {l.standard_spec}
+                </b>
+                <small>
+                  {resolutionLabels[l.resolution]} · 준비{' '}
+                  {l.pick_qty ?? '미확인'} / 재고 {l.stock_qty ?? '미확인'} ·{' '}
+                  {l.customer} {l.method_raw || l.method}
+                </small>
+                <small>
+                  원문 {l.raw_name} {l.raw_spec}
+                  {l.reason ? ' · ' + l.reason : ''}
+                </small>
+              </div>
+            ))}
+          </section>
+        )}
         <ErrorText text={task.error} />
-        <button className="primary" disabled={task.busy || !raw.trim()}>
-          {task.busy ? '등록 중…' : '검토 자료 등록'}
+        <button
+          className="primary"
+          disabled={
+            task.busy || !raw.trim() || !!(preview && !preview.can_submit)
+          }
+        >
+          {task.busy
+            ? '확인 중…'
+            : preview
+              ? '검토 자료 등록'
+              : '등록 전 사전 검증'}
         </button>
       </form>
-      {received && (
+      {received?.verified && (
         <p role="status" className="callout">
           {received.duplicate
             ? '이미 등록된 문서입니다.'
-            : '검토 자료를 등록했습니다.'}{' '}
-          {statuses[received.status]} · 재고 반영 전
+            : '검토 자료를 등록했습니다. 저장값을 대조했습니다.'}{' '}
+          {received.already_closed
+            ? '기존 마감 확인됨'
+            : received.status === 'dismissed'
+              ? '취소된 버전'
+              : received.status === 'previous'
+                ? '이전 버전'
+                : statuses[received.status]}{' '}
+          ·{' '}
+          {received.duplicate ? '이번 전송으로 재고 변동 없음' : '재고 반영 전'}
         </p>
       )}
       <Connection />

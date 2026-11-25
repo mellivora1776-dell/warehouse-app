@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "test": "node --test tests/calculation.test.mjs",
-    "test:workflow": "python3 tests/test_workflow.py",
+    "test:workflow": "python3 tests/test_workflow.py && python3 tests/test_analysis.py",
     "test:browser": "node tests/browser-workflow.mjs"
   },
   "dependencies": {

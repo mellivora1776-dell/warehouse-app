@@ -8,8 +8,10 @@ import { randomUUID, createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { build } from 'vite'
 import { chromium } from 'playwright-core'
+import { verifyAnalysisMobile } from './mobile-analysis.mjs'
 import pin from '../api/pin.js'
 import intake from '../api/intake.js'
+import preflight from '../api/preflight.js'
 import evidence from '../api/evidence.js'
 
 const config = JSON.parse(await readFile(process.env.WM_QA_CONFIG, 'utf8'))
@@ -18,6 +20,7 @@ const root = fileURLToPath(new URL('../', import.meta.url)),
 const routes = {
   '/api/pin': pin,
   '/api/intake': intake,
+  '/api/preflight': preflight,
   '/api/evidence': evidence,
 }
 const mime = {
@@ -171,7 +174,7 @@ try {
   assert.ok(day)
   const key = randomUUID(),
     doc = {
-      schema_version: 1,
+      schema_version: 2,
       document_id: 'qa-' + key + '-1',
       case_id: 'qa-' + key,
       version: 1,
@@ -185,16 +188,26 @@ try {
     }
   const intakeToken = (await rpc('wm2_key', { p_action: 'rotate' })).token
   const send = async (document) => {
-    const r = await fetch(origin + '/api/intake', {
+    const pre = await fetch(origin + '/api/preflight', {
       method: 'POST',
       headers: headers(intakeToken),
       body: JSON.stringify(document),
+    })
+    assert.equal(pre.status, 200)
+    const plan = await pre.json()
+    assert.ok(plan.can_submit, JSON.stringify(plan.blockers))
+    const r = await fetch(origin + '/api/intake', {
+      method: 'POST',
+      headers: headers(intakeToken),
+      body: JSON.stringify({ ...document, preview_stamp: plan.stamp }),
     })
     return { status: r.status, data: await r.json() }
   }
   const first = await send(doc)
   assert.equal(first.status, 201)
   assert.equal(first.data.stock_posted, false)
+  assert.ok(first.data.verified)
+  assert.equal(first.data.stored_lines[0].stock_qty, 5)
   assert.equal((await send(doc)).data.duplicate, true)
   browser = await chromium.launch({
     executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
@@ -251,7 +264,7 @@ try {
   await navigate(a, true, 'picking', '피킹리스트')
   await a.getByLabel('출고 날짜').fill(day)
   await a.getByLabel(item.name + ' 피킹 완료').click()
-  await a.getByText(/직납 · 피킹 완료/).waitFor()
+  assert.ok(await a.getByRole('checkbox').isChecked())
   await fits(a)
   const newer = {
     ...doc,
@@ -262,10 +275,11 @@ try {
   }
   await navigate(a, true, 'intake', '분석 자료 등록')
   await a.getByLabel('분석 결과 JSON').fill(JSON.stringify(newer))
+  await a.getByRole('button', { name: '등록 전 사전 검증' }).click()
   await a.getByRole('button', { name: '검토 자료 등록' }).click()
   await a.getByText(/검토 자료를 등록했습니다/).waitFor()
   await navigate(a, true, 'picking', '피킹리스트')
-  await a.getByText(/이전 피킹 내용 변경/).waitFor()
+  await a.getByText(/기존 피킹 변경/).waitFor()
   assert.equal(await a.getByRole('checkbox').isChecked(), false)
   const internal = {
     ...doc,
@@ -277,9 +291,10 @@ try {
   }
   assert.equal((await send(internal)).status, 201)
   await navigate(a, true, 'daily', '일일 마감')
-  const card = a.locator('.product-card').filter({ hasText: item.name })
+  const card = a.locator('.close-item').filter({ hasText: item.name })
+  await card.locator('summary').click()
   await card.getByText('생산출고', { exact: true }).waitFor()
-  assert.equal(await a.locator('.product-card').count(), 1)
+  assert.equal(await a.locator('.close-item').count(), 1)
   const trades = card.locator('.trade')
   await trades
     .filter({ hasText: '시험 거래처 · 직납' })
@@ -291,6 +306,8 @@ try {
   await fits(a)
   await dialog.getByRole('button', { name: '검토 저장' }).click()
   await dialog.waitFor({ state: 'hidden' })
+  if (!(await card.evaluate((e) => e.open)))
+    await card.locator('summary').click()
   await trades
     .filter({ hasText: '생산출고' })
     .getByRole('button', { name: '거래 검토' })
@@ -300,7 +317,11 @@ try {
   await dialog.getByText(/현재 10개 → 예상 7개/).waitFor()
   await dialog.getByRole('button', { name: '검토 저장' }).click()
   await dialog.waitFor({ state: 'hidden' })
-  await card.getByText('예상 현재고 7개').waitFor()
+  await card
+    .locator('.close-numbers span')
+    .filter({ hasText: '예상 마감' })
+    .getByText('7', { exact: true })
+    .waitFor()
   if (process.env.WM_QA_REVIEW_PNG)
     await a.screenshot({ path: process.env.WM_QA_REVIEW_PNG, fullPage: true })
   await fits(a)
@@ -407,6 +428,30 @@ try {
     Buffer.from(await (await fetch(link)).arrayBuffer()),
     fileBytes,
   )
+  if (process.env.WM_QA_ANALYSIS_PNG_DIR) {
+    const detailClose = a.getByLabel('품목 상세 닫기')
+    if (await detailClose.isVisible()) await detailClose.click()
+    let analysisDay
+    for (let i = 0; i < 365; i++) {
+      const candidate = new Date(Date.UTC(2044, 10, 20 + i))
+          .toISOString()
+          .slice(0, 10),
+        data = await rpc('wm2_day', { p_day: candidate })
+      if (!data.rows.length && !data.issues.length) {
+        analysisDay = candidate
+        break
+      }
+    }
+    assert.ok(analysisDay)
+    await verifyAnalysisMobile({
+      page: a,
+      rpc,
+      navigate,
+      fits,
+      day: analysisDay,
+      output: process.env.WM_QA_ANALYSIS_PNG_DIR,
+    })
+  }
   assert.deepEqual(exceptions, [])
   console.log(
     'PASS · PIN roles, 320px/1280px, versioned intake, picking, grouped review edits, close 10→7, confirmed logs/sales, manual pending, immediate count 7→5, private file bytes, duplicate image and administrator-only access.',

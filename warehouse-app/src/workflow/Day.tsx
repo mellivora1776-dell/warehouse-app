@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronRight, MapPin, Check, ClipboardList } from 'lucide-react'
+import { ChevronRight, AlertCircle } from 'lucide-react'
 import { rpc } from '../db'
 import { Empty, Refresh } from '../ui'
 import {
@@ -15,6 +15,11 @@ import {
 import {
   categoryLabels,
   decisions,
+  attention,
+  completed,
+  pickCount,
+  stockCount,
+  standardName,
   planned,
   grouped,
   rowLabel,
@@ -98,37 +103,42 @@ export function Daily({ day, setDay, admin }: Props) {
   const rows = d?.rows ?? [],
     issues = d?.issues ?? [],
     batches = d?.batches ?? [],
-    ready = rows.filter((r) => !r.entry_id && r.decision === 'ready')
+    ready = rows.filter((r) => !completed(r) && r.decision === 'ready')
   const pending = rows.filter(
-      (r) => !r.entry_id && r.decision === 'pending',
+      (r) => !completed(r) && r.decision === 'pending',
     ).length,
     openIssues = issues.filter((i) => !i.deferred).length
   const groups = grouped(rows)
-  const shortage = groups.some((group) => {
-    const delta = planned(group.filter((r) => r.decision === 'ready'))
-    return (
-      group.some((r) => !r.entry_id && r.decision === 'ready') &&
-      (group[0].qty == null || group[0].qty + delta.net < 0)
+
+  const blockers = groups.flatMap((g) => {
+    const reasons: string[] = [...new Set(g.map(attention).filter(Boolean))]
+    const forecast = planned(g),
+      approving = planned(g.filter((r) => r.decision === 'ready'))
+    if (
+      g[0].stock_managed !== false &&
+      g[0].qty != null &&
+      g[0].qty + Math.min(forecast.net, approving.net) < 0
     )
+      reasons.push('재고 부족')
+    return reasons.length
+      ? [{ row: g.find((r) => attention(r)) || g[0], reasons }]
+      : []
   })
   const remaining =
-    rows.some((r) => !r.entry_id && r.decision !== 'exclude') || !!issues.length
+    rows.some((r) => !completed(r) && r.decision !== 'exclude') || !!openIssues
+  const blocked = !!pending || !!openIssues || !!blockers.length
   const scope = 'close:' + day
-  const switchDay = (date: string) => {
-    setSuccess('')
-    setDay(date)
-  }
   async function approve() {
     if (!d) return
     await task.run(async () => {
-      const complete = await rpc<{ sequence: number }>('wm2_close', {
+      const b = await rpc<{ sequence: number }>('wm2_close', {
         p_day: day,
         p_stamp: d.stamp,
         p_request: requestId(scope, d.stamp),
       })
       doneRequest(scope)
       setConfirm(false)
-      setSuccess(day + ' ' + complete.sequence + '차 마감을 저장했습니다.')
+      setSuccess(day + ' ' + b.sequence + '차 마감을 저장했습니다.')
       result.reload()
     })
   }
@@ -139,7 +149,13 @@ export function Daily({ day, setDay, admin }: Props) {
         <Refresh onClick={result.reload} />
       </div>
       <div className="work-toolbar">
-        <DayField day={day} setDay={switchDay} />
+        <DayField
+          day={day}
+          setDay={(date) => {
+            setDay(date)
+            setSuccess('')
+          }}
+        />
         <label>
           수불 유형
           <select value={cat} onChange={(e) => setCat(e.target.value)}>
@@ -153,14 +169,14 @@ export function Daily({ day, setDay, admin }: Props) {
                 'as',
               ] as const
             ).map((k) => (
-              <option key={k} value={k}>
+              <option value={k} key={k}>
                 {categoryLabels[k]}
               </option>
             ))}
           </select>
         </label>
       </div>
-      {!confirm && <ErrorText text={task.error} />}
+      {!confirm && <ErrorText text={task.error} />}{' '}
       {success && (
         <p role="status" className="callout">
           {success}
@@ -180,145 +196,203 @@ export function Daily({ day, setDay, admin }: Props) {
                   ? '검토 중'
                   : '등록 내역 없음'}
             </h3>
-            <span>{day} · 한국 시간</span>
+            <span>{pending > 0 ? '승인 전 거래 ' + pending + '건' : day}</span>
           </div>
-          {(pending > 0 || openIssues > 0 || shortage) && (
-            <div className="check-notice" role="status">
-              {[
-                pending ? '거래 ' + pending + '건 미검토' : '',
-                openIssues ? '문서 ' + openIssues + '건 확인 필요' : '',
-                shortage
-                  ? '승인 대상에 재고 부족 또는 미확인 품목이 있습니다'
-                  : '',
-              ]
-                .filter(Boolean)
-                .join(' · ')}
-            </div>
-          )}
-          {issues.map((i) => (
-            <button
-              className="issue-row"
-              key={i.id}
-              onClick={() => setSource({ id: i.id, issue: i })}
-            >
-              <span>
-                <b>
-                  {i.deferred ? '보류 · ' : ''}
-                  {i.external_id}
-                </b>
-                <small>{i.issue}</small>
-              </span>
-              <ChevronRight size={17} />
-            </button>
-          ))}
-          {groups
-            .filter((g) => !cat || g.some((r) => r.category === cat))
-            .map((g) => {
-              const first = g[0],
-                s = planned(g)
-              const posted = g.filter((r) => r.entry_id),
-                hasPlan = g.some((r) => !r.entry_id && r.decision !== 'exclude')
-              const postedIn = posted.reduce(
-                  (n, r) => n + (r.direction > 0 ? (r.final_qty ?? 0) : 0),
-                  0,
-                ),
-                postedOut = posted.reduce(
-                  (n, r) => n + (r.direction < 0 ? (r.final_qty ?? 0) : 0),
-                  0,
-                )
-              const remainingQty = first.qty == null ? null : first.qty + s.net
-              return (
-                <article
-                  className="product-card"
-                  key={first.item_id ?? first.id}
+          {(issues.length > 0 || blockers.length > 0) && (
+            <section className="attention-list">
+              <h3>
+                <AlertCircle size={16} /> 확인 필요
+              </h3>
+              {issues.map((i) => (
+                <button
+                  className="issue-row"
+                  key={i.id}
+                  onClick={() => setSource({ id: i.id, issue: i })}
                 >
-                  <header>
-                    <div>
-                      <h3>{first.name || first.raw_name}</h3>
-                      {(first.item_spec || first.spec) && (
-                        <small>{first.item_spec || first.spec}</small>
-                      )}
-                    </div>
-                    <span>
-                      {first.item_id
-                        ? '현재고 ' + qty(first.qty)
-                        : 'SKU 연결 필요'}
-                    </span>
-                  </header>
-                  <div className="detail-heading">
-                    <span>입출고 상세</span>
-                    <span>수량</span>
-                  </div>
-                  {g
-                    .filter((r) => !cat || r.category === cat)
-                    .map((r) => (
-                      <div className="trade" key={r.id}>
-                        <div className="trade-main">
-                          <div>
-                            <b>{rowLabel(r)}</b>
-                            <small>
-                              {r.external_id} ·{' '}
-                              {r.entry_id ? '승인 완료' : decisions[r.decision]}
-                              {r.edition && r.edition > 1 ? ' · 수정본' : ''}
-                            </small>
-                            {r.reason && <small>{r.reason}</small>}
-                          </div>
-                          <strong>
-                            {r.direction > 0 ? '+' : '−'}
-                            {r.final_qty ?? '?'}
-                          </strong>
-                        </div>
-                        <div className="row-actions">
-                          {r.final_qty !== r.read_qty && (
-                            <small>원문 {qty(r.read_qty)}</small>
-                          )}
-                          <button
-                            className="textbtn"
-                            onClick={() => setSource({ id: r.document_id })}
-                          >
-                            근거·버전
-                          </button>
-                          {admin && !r.entry_id && (
-                            <button
-                              className="quiet"
-                              onClick={() => setEdit(r)}
-                            >
-                              거래 검토
-                            </button>
-                          )}
-                        </div>
+                  <span>
+                    <b>{i.customer || '문서 관계'}</b>
+                    <small>
+                      {i.deferred ? '보류 · ' : ''}
+                      {i.issue}
+                    </small>
+                  </span>
+                  <ChevronRight size={16} />
+                </button>
+              ))}
+              {blockers.map(({ row, reasons }) => (
+                <button
+                  className="issue-row"
+                  key={row.id}
+                  onClick={() =>
+                    admin ? setEdit(row) : setSource({ id: row.document_id })
+                  }
+                >
+                  <span>
+                    <b>{standardName(row)}</b>
+                    <small>{reasons.join(' · ')}</small>
+                  </span>
+                  <ChevronRight size={16} />
+                </button>
+              ))}
+            </section>
+          )}
+          <div className="close-list">
+            {groups
+              .filter((g) => !cat || g.some((r) => r.category === cat))
+              .map((g) => {
+                const r = g[0],
+                  p = planned(g),
+                  posted = g
+                    .filter((x) => x.entry_id != null)
+                    .sort((a, b) => a.entry_id! - b.entry_id!),
+                  historical =
+                    !!posted.length &&
+                    g.every((x) => completed(x) || x.decision === 'exclude'),
+                  base = historical ? posted[0].posted_before : r.qty,
+                  next = historical
+                    ? posted[posted.length - 1].posted_after
+                    : r.qty == null
+                      ? null
+                      : r.qty + p.net,
+                  spec = r.item_spec || r.standard_spec || r.spec
+                if (historical) {
+                  for (const x of posted) {
+                    if (x.direction > 0) p.incoming += stockCount(x) ?? 0
+                    else p.outgoing += stockCount(x) ?? 0
+                  }
+                }
+                return (
+                  <details className="close-item" key={r.item_id || r.id}>
+                    <summary>
+                      <div className="close-name">
+                        <strong>{standardName(r)}</strong>
+                        {r.variant === 'order' && <small>주문품</small>}
+                        <ChevronRight size={16} />
                       </div>
-                    ))}
-                  {posted.length > 0 && (
-                    <p className="small-meta">
-                      이 날짜 확정 · 입고 {qty(postedIn)} / 출고{' '}
-                      {qty(postedOut)}
-                    </p>
-                  )}
-                  {hasPlan && (
-                    <footer className="projection">
-                      <span>
-                        품목 예정 합계 · 입고 {qty(s.incoming)} / 출고{' '}
-                        {qty(s.outgoing)}
-                      </span>
-                      <b
-                        className={
-                          remainingQty != null && remainingQty < 0
-                            ? 'negative'
-                            : ''
-                        }
-                      >
-                        예상 현재고 {qty(remainingQty)}
-                      </b>
-                    </footer>
-                  )}
-                </article>
-              )
-            })}
+                      {spec && spec !== standardName(r) && (
+                        <div className="minor-spec">{spec}</div>
+                      )}
+                      {r.stock_managed === false ? (
+                        <small className="nonstock">
+                          {g.some((x) => x.pick_required)
+                            ? '피킹 전용 · 준비 ' +
+                              qty(
+                                g.reduce((n, x) => n + (pickCount(x) ?? 0), 0),
+                              ) +
+                              ' · 재고 차감 없음'
+                            : '입고 보고 · 재고 증가 없음'}
+                        </small>
+                      ) : (
+                        <div className="close-numbers">
+                          {[
+                            ['기존', base ?? '미확인'],
+                            ['입고', '+' + p.incoming],
+                            ['출고', '−' + p.outgoing],
+                            [
+                              historical ? '확정 마감' : '예상 마감',
+                              next ?? '미확인',
+                            ],
+                          ].map(([label, num]) => (
+                            <span key={label}>
+                              <small>{label}</small>
+                              <b
+                                className={
+                                  label === '예상 마감' &&
+                                  next != null &&
+                                  next < 0
+                                    ? 'negative'
+                                    : ''
+                                }
+                              >
+                                {num}
+                              </b>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </summary>
+                    <div className="close-trades">
+                      {g
+                        .filter((x) => !cat || x.category === cat)
+                        .map((x) => (
+                          <div className="trade" key={x.id}>
+                            <div className="trade-main">
+                              <div>
+                                <b>{rowLabel(x)}</b>
+                                <small>
+                                  {completed(x)
+                                    ? '승인 완료'
+                                    : decisions[x.decision]}
+                                  {(x.edition ?? 0) > 1 ? ' · 수정본' : ''}{' '}
+                                  {x.reason}
+                                </small>
+                              </div>
+                              <strong>
+                                {x.stock_managed === false
+                                  ? '준비 ' + qty(pickCount(x))
+                                  : (x.direction > 0 ? '+' : '−') +
+                                    (stockCount(x) ?? '?') +
+                                    '개'}
+                              </strong>
+                            </div>
+                            <small className="small-meta">
+                              원문 {x.raw_name} {x.spec} · {qty(x.read_qty)}
+                              {x.packing ? ' · ' + x.packing : ''}
+                              {x.remarks ? ' · ' + x.remarks : ''}
+                            </small>
+                            <div className="row-actions">
+                              <button
+                                className="textbtn"
+                                onClick={() => setSource({ id: x.document_id })}
+                              >
+                                근거·버전
+                              </button>
+                              {admin &&
+                                !completed(x) &&
+                                x.decision === 'pending' &&
+                                !attention(x) && (
+                                  <button
+                                    className="textbtn"
+                                    disabled={task.busy}
+                                    onClick={() =>
+                                      void task.run(async () => {
+                                        await rpc('wm2_review', {
+                                          p_line: x.id,
+                                          p_rev: x.rev,
+                                          p_item: x.item_id,
+                                          p_qty: x.final_qty,
+                                          p_method: x.method,
+                                          p_customer: x.customer,
+                                          p_decision: 'ready',
+                                          p_reason: x.reason,
+                                        })
+                                        result.reload()
+                                      })
+                                    }
+                                  >
+                                    검토 완료
+                                  </button>
+                                )}
+                              {admin && !completed(x) && (
+                                <button
+                                  className="quiet"
+                                  onClick={() => setEdit(x)}
+                                >
+                                  거래 검토
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </details>
+                )
+              })}
+          </div>
           {!rows.length && !issues.length && (
             <Empty title="이 날짜에 검토할 거래가 없습니다" />
           )}
-          {!!batches.length && (
+          {batches.length > 0 && (
             <section className="past-batches">
               <h3>확정된 마감</h3>
               {batches.map((b: Batch) => (
@@ -343,16 +417,14 @@ export function Daily({ day, setDay, admin }: Props) {
           {admin && (rows.length > 0 || issues.length > 0) && (
             <div className="close-foot">
               <p>
-                승인은 선택한 날짜의 모든 유형에 적용됩니다. 보류·제외는
-                합계에서 빠집니다.
+                {day} 전체 유형 · 승인 대상 {ready.length}건. 필터와 관계없이
+                보류·제외를 뺀 거래를 확정합니다.
               </p>
               <button
                 className="primary"
                 disabled={
                   task.busy ||
-                  !!pending ||
-                  !!openIssues ||
-                  shortage ||
+                  blocked ||
                   (!ready.length && !remaining && !!batches.length)
                 }
                 onClick={() => setConfirm(true)}
@@ -365,13 +437,13 @@ export function Daily({ day, setDay, admin }: Props) {
       )}
       {confirm && d && (
         <Sheet title="일일 마감 승인 확인" close={() => setConfirm(false)}>
-          <h2>{day}</h2>
-          <p className="confirm-text">
-            실제 입출고가 완료된 승인 대상 {ready.length}건을 반영합니다. 이후
-            변경은 정정 거래로 남습니다.
+          <h2>{day} 전체 유형</h2>
+          <p>
+            확인한 거래 {ready.length}건을 마감합니다. 재고 관리 대상의 수량만
+            반영합니다.
           </p>
           <ErrorText text={task.error} />
-          <button disabled={task.busy} className="primary" onClick={approve}>
+          <button className="primary" disabled={task.busy} onClick={approve}>
             {task.busy ? '승인 처리 중…' : '확인하고 마감 확정'}
           </button>
         </Sheet>
@@ -396,171 +468,4 @@ export function Daily({ day, setDay, admin }: Props) {
     </>
   )
 }
-export function Picking({ day, setDay, admin }: Props) {
-  const result = useData<DayData>('wm2_day', { p_day: day }),
-    task = useTask(result.reload)
-  const [sort, setSort] = useState('rack'),
-    [source, setSource] = useState('')
-  const [pendingPick, setPendingPick] = useState<{
-    id: string
-    done: boolean
-  } | null>(null)
-  const outbound = (result.data?.rows ?? []).filter(
-    (r) =>
-      !r.entry_id &&
-      r.doc_status === 'current' &&
-      r.direction < 0 &&
-      ['sale', 'production_out'].includes(r.category) &&
-      !['hold', 'exclude'].includes(r.decision),
-  )
-  const documents = new Map<string, Row[]>()
-  for (const r of outbound) {
-    const rows = documents.get(r.document_id) ?? []
-    rows.push(r)
-    documents.set(r.document_id, rows)
-  }
-  const collator = new Intl.Collator('ko', { numeric: true })
-  const rackKey = (r: Row) =>
-    [...(r.racks ?? [])].sort(collator.compare)[0] || '￿'
-  return (
-    <>
-      <div className="title-row">
-        <h1>피킹리스트</h1>
-        <Refresh onClick={result.reload} />
-      </div>
-      <div className="work-toolbar">
-        <DayField day={day} setDay={setDay} label="출고 날짜" />
-        <label>
-          건별 정렬
-          <select value={sort} onChange={(e) => setSort(e.target.value)}>
-            <option value="rack">랙 위치순</option>
-            <option value="name">품목명순</option>
-          </select>
-        </label>
-      </div>
-      <ErrorText text={task.error} />
-      {!result.data ? (
-        <Loading error={result.error} retry={result.reload} />
-      ) : (
-        <>
-          {result.data.issues.length > 0 && (
-            <p className="check-notice">
-              식별 또는 대조가 필요한 문서 {result.data.issues.length}건은 일일
-              마감에서 확인하세요.
-            </p>
-          )}
-          {result.data.removed.map((r, i) => (
-            <p className="check-notice" key={i}>
-              {r.external_id} 수정 · 이미 피킹한 {r.name} {qty(r.qty)}가 새
-              지시서에서 빠졌습니다.
-            </p>
-          ))}
-          {Array.from(documents.entries()).map(([id, list]) => (
-            <article className="product-card" key={id}>
-              <header>
-                <div>
-                  <small>
-                    {categoryLabels[list[0].category]} · {list[0].case_key}
-                  </small>
-                  <h3>{list[0].customer || '생산 작업'}</h3>
-                  <small>
-                    {list[0].external_id} · v{list[0].version}
-                    {(list[0].edition ?? 0) > 1 ? ' 수정본' : ''}
-                  </small>
-                </div>
-                <button className="textbtn" onClick={() => setSource(id)}>
-                  근거·버전
-                </button>
-              </header>
-              {list
-                .sort(
-                  (a, b) =>
-                    (sort === 'rack'
-                      ? collator.compare(rackKey(a), rackKey(b))
-                      : 0) ||
-                    collator.compare(
-                      a.name || a.raw_name,
-                      b.name || b.raw_name,
-                    ),
-                )
-                .map((r) => (
-                  <div className="pick-row" key={r.id}>
-                    {admin ? (
-                      <input
-                        type="checkbox"
-                        aria-label={(r.name || r.raw_name) + ' 피킹 완료'}
-                        disabled={task.busy || !r.item_id || !r.final_qty}
-                        checked={
-                          pendingPick?.id === r.id ? pendingPick.done : r.picked
-                        }
-                        onChange={(e) => {
-                          const done = e.target.checked
-                          setPendingPick({ id: r.id, done })
-                          void task
-                            .run(async () => {
-                              await rpc('wm2_pick', {
-                                p_line: r.id,
-                                p_rev: r.rev,
-                                p_done: done,
-                              })
-                              result.reload()
-                            })
-                            .finally(() => setPendingPick(null))
-                        }}
-                      />
-                    ) : r.picked ? (
-                      <Check size={18} />
-                    ) : (
-                      <ClipboardList size={18} />
-                    )}
-                    <div>
-                      <b>{r.name || r.raw_name}</b>
-                      {(r.item_spec || r.spec) && (
-                        <small>{r.item_spec || r.spec}</small>
-                      )}
-                      <small>
-                        <MapPin size={13} />{' '}
-                        {r.racks?.join(' · ') || '위치 미등록'}
-                      </small>
-                      <small>
-                        {r.method ||
-                          (r.category === 'sale'
-                            ? '방식 미확인'
-                            : '내부 반출')}{' '}
-                        · {r.picked ? '피킹 완료' : '피킹 대기'}
-                      </small>
-                      {r.pick_changed && (
-                        <strong className="warn">
-                          이전 피킹 내용 변경 · 다시 확인
-                        </strong>
-                      )}
-                      {(r.qty == null ||
-                        r.final_qty == null ||
-                        r.qty < r.final_qty) && (
-                        <small className="negative">
-                          {r.qty == null
-                            ? '현재고 미확인'
-                            : r.final_qty == null
-                              ? '출고 수량 미확인'
-                              : '현재고 ' +
-                                qty(r.qty) +
-                                ' · ' +
-                                qty(r.final_qty - r.qty) +
-                                ' 부족'}
-                        </small>
-                      )}
-                    </div>
-                    <strong>{qty(r.final_qty)}</strong>
-                  </div>
-                ))}
-            </article>
-          ))}
-          {!documents.size && <Empty title="피킹할 출고 지시가 없습니다" />}
-        </>
-      )}
-      {source && (
-        <Evidence id={source} admin={admin} close={() => setSource('')} />
-      )}
-    </>
-  )
-}
+export { Picking } from './Picking'

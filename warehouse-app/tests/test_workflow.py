@@ -125,6 +125,7 @@ class Workflow(unittest.TestCase):
         select md5(string_agg(to_jsonb(e)::text,'|' order by id)) from warehouse_master.entries e;"""
         before = cls.sql(digest)
         cls.sql((ROOT / "supabase/04_workflow_v2.sql").read_text())
+        cls.sql((ROOT / "supabase/05_analysis.sql").read_text())
         assert before == cls.sql(
             digest
         ), "Migration changed baseline inventory or ledger"

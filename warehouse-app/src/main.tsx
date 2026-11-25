@@ -378,6 +378,10 @@ function Home({ user }: { user: User }) {
       {openDays.length > 0 && role === 'admin' && (
         <Sheet title="미마감 내역" close={() => setOpenDays([])}>
           <h2>검토할 날짜</h2>
+          <p className="help">
+            날짜를 선택하면 검토표가 열립니다. 재고 반영은 검토표에서 마감 확정
+            시 진행됩니다.
+          </p>
           {openDays.map((d) => (
             <button
               key={d}

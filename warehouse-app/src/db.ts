@@ -79,6 +79,15 @@ export function message(err: unknown): string {
       }
     }
     Object.assign(msg, {
+      WM3_PREFLIGHT_CHANGED:
+        '마스터 또는 문서 상태가 바뀌었습니다. 다시 사전 검증해 주세요.',
+      WM3_RECEIPT_MISMATCH: '사전 검증과 실제 결과가 달라 등록을 중단했습니다.',
+      WM3_BLOCKED:
+        '입력 내용이 현장 규칙과 충돌합니다. 사전 검증 결과를 확인하세요.',
+      WM3_CANCEL_FIRST: '대체할 문서의 취소 상태를 확인하세요.',
+      WM3_CORRECTION_ONLY: '승인 이력이 있는 건은 별도 정정 거래로 처리하세요.',
+      WM3_VARIANT: '기본·주문 구분, 모터·완성품과 사양을 확인하세요.',
+      WM3_ALIAS_CONFLICT: '같은 문맥에 다른 별칭이 이미 있습니다.',
       WM2_FILE_USED: '이 파일은 이미 다른 문서에 연결되어 있습니다.',
       WM2_USE_CLOSE: '입출고는 일일 마감에서 승인해 주세요.',
       WM2_DOCUMENT_CONFLICT:
@@ -89,7 +98,8 @@ export function message(err: unknown): string {
       WM2_REVIEW_FIRST:
         '미검토 거래와 수정본 후보를 확인하거나 보류·제외해 주세요.',
       WM2_LINE: '행 식별자, 원문 품명, 수량이나 신뢰도를 확인해 주세요.',
-      WM2_METHOD: '영업출고 방식은 직납·화물·방문 중에서 선택해 주세요.',
+      WM2_METHOD:
+        '영업출고 방식은 직납·화물·방문·퀵·용차 중에서 선택해 주세요.',
       WM2_FORMAT: '문서 형식, 날짜, 버전, 파일 지문을 확인해 주세요.',
       WM2_INCOMPLETE: 'SKU, 수량, 영업출고 거래처와 방식을 확인해 주세요.',
       WM2_REASON: '보류·제외 또는 정정 사유를 입력해 주세요.',

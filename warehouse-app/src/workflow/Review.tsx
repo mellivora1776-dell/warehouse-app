@@ -8,6 +8,8 @@ import {
   methods,
   qty,
   planned,
+  pickCount,
+  stockCount,
 } from './model'
 import { Sheet, SkuSearch, useTask, ErrorText } from './shared'
 
@@ -27,7 +29,7 @@ export function Review({
       name: row.name,
       qty: row.qty,
     }),
-    [search, setSearch] = useState(!row.item_id),
+    [search, setSearch] = useState(!row.item_id && row.stock_managed !== false),
     [reg, setReg] = useState(false)
   const [n, setN] = useState(
       row.final_qty == null ? '' : String(row.final_qty),
@@ -38,9 +40,19 @@ export function Review({
       row.decision === 'pending' ? 'ready' : row.decision,
     ),
     [reason, setReason] = useState(row.reason)
-  const [sku, setSku] = useState(row.raw_sku || row.raw_name),
-    [name, setName] = useState(row.raw_name),
-    [spec, setSpec] = useState(row.spec),
+  const managed = row.stock_managed !== false,
+    picking = row.pick_required ?? row.direction < 0
+  const [pick, setPick] = useState(String(pickCount(row) ?? '')),
+    [stock, setStock] = useState(String(stockCount(row) ?? ''))
+  const [remember, setRemember] = useState(false),
+    [context, setContext] = useState(row.context || '')
+  const [sku, setSku] = useState(
+      [row.standard_name || row.raw_name, row.standard_spec]
+        .filter(Boolean)
+        .join(' '),
+    ),
+    [name, setName] = useState(row.standard_name || row.raw_name),
+    [spec, setSpec] = useState(row.standard_spec || row.spec),
     [racks, setRacks] = useState(''),
     [first, setFirst] = useState(''),
     [ordered, setOrdered] = useState(true),
@@ -52,7 +64,12 @@ export function Review({
   })
   const after = planned([
     ...all.filter((r) => r.id !== row.id && r.item_id === item.id),
-    { ...row, final_qty: n ? Number(n) : null, decision },
+    {
+      ...row,
+      final_qty: n ? Number(n) : null,
+      stock_qty: stock ? Number(stock) : null,
+      decision,
+    },
   ])
   function select(i: SKU) {
     setItem(i)
@@ -72,25 +89,81 @@ export function Review({
         <h2>{row.raw_name}</h2>
         {row.spec && <p>{row.spec}</p>}
       </div>
-      <div className="form-block">
-        <div className="mini-row">
-          <div>
-            <small>연결된 SKU</small>
-            <b>{item.name || '연결 필요'}</b>
-          </div>
-          <button className="quiet" onClick={() => setSearch(!search)}>
-            {search ? '검색 닫기' : '품목 찾기'}
-          </button>
-        </div>
-        {search && (
-          <>
-            <SkuSearch initial={row.raw_sku || row.raw_name} select={select} />
-            <button className="textbtn" onClick={() => setReg(!reg)}>
-              {reg ? '등록 취소' : '새 SKU 등록'}
+      {managed ? (
+        <div className="form-block">
+          <div className="mini-row">
+            <div>
+              <small>연결된 SKU</small>
+              <b>{item.name || '연결 필요'}</b>
+            </div>
+            <button className="quiet" onClick={() => setSearch(!search)}>
+              {search ? '검색 닫기' : '품목 찾기'}
             </button>
-          </>
-        )}
-      </div>
+          </div>
+          {search && (
+            <>
+              <SkuSearch
+                initial={row.raw_sku || row.raw_name}
+                select={select}
+              />
+              <button className="textbtn" onClick={() => setReg(!reg)}>
+                {reg ? '등록 취소' : '새 SKU 등록'}
+              </button>
+            </>
+          )}
+          {item.id && item.name !== row.raw_name && !reconcile && (
+            <details className="expand">
+              <summary>별칭 적용 범위</summary>
+              <label className="checklabel">
+                <input
+                  type="checkbox"
+                  checked={remember}
+                  onChange={(e) => setRemember(e.target.checked)}
+                />
+                이후 동일한 원문에도 적용
+              </label>
+              {remember && (
+                <label>
+                  적용 문맥
+                  <input
+                    value={context}
+                    onChange={(e) => setContext(e.target.value)}
+                    placeholder="모든 문맥은 빈칸"
+                  />
+                </label>
+              )}
+            </details>
+          )}
+        </div>
+      ) : (
+        <>
+          <p className="callout">
+            {picking
+              ? '피킹 전용 · 재고 차감 없음'
+              : '입고 보고 · 재고 증가 없음'}
+          </p>
+          <details className="expand">
+            <summary>집계 제외 규칙 재사용</summary>
+            <label className="checklabel">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+              />
+              이후 같은 현장 명칭에 적용
+            </label>
+            {remember && (
+              <label>
+                적용 문맥
+                <input
+                  value={context}
+                  onChange={(e) => setContext(e.target.value)}
+                />
+              </label>
+            )}
+          </details>
+        </>
+      )}
       {reg ? (
         <form
           className="work-form review-box"
@@ -201,7 +274,11 @@ export function Review({
                 complete()
                 return
               }
-              await rpc('wm2_review', {
+              await rpc('wm3_review', {
+                p_pick_qty: picking ? (pick ? Number(pick) : null) : 0,
+                p_stock_qty: managed ? (stock ? Number(stock) : null) : 0,
+                p_remember: remember,
+                p_context: context,
                 p_line: row.id,
                 p_rev: row.rev,
                 p_item: item.id,
@@ -227,7 +304,12 @@ export function Review({
                     step="1"
                     required={decision === 'ready'}
                     value={n}
-                    onChange={(e) => setN(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      if (picking && pick === n) setPick(value)
+                      if (managed && stock === n) setStock(value)
+                      setN(value)
+                    }}
                   />
                 </label>
                 <div className="metric">
@@ -235,6 +317,37 @@ export function Review({
                   <b>{qty(row.read_qty)}</b>
                 </div>
               </div>
+              {(picking || managed) && (
+                <details className="expand">
+                  <summary>피킹·재고 반영 수량</summary>
+                  <div className="form-pair">
+                    {picking && (
+                      <label>
+                        피킹 준비 수량
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={pick}
+                          onChange={(e) => setPick(e.target.value)}
+                        />
+                      </label>
+                    )}
+                    {managed && (
+                      <label>
+                        재고 반영 수량
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={stock}
+                          onChange={(e) => setStock(e.target.value)}
+                        />
+                      </label>
+                    )}
+                  </div>
+                </details>
+              )}
               {row.category === 'sale' && (
                 <div className="form-pair">
                   <label>

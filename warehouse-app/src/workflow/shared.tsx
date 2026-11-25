@@ -13,9 +13,12 @@ export function useData<T>(
     [error, setError] = useState(''),
     [retry, setRetry] = useState(0)
   const key = JSON.stringify(args)
+  const activeQuery = useRef('')
   useEffect(() => {
     let active = true
-    setData(null)
+    const identity = name + key
+    if (activeQuery.current !== identity) setData(null)
+    activeQuery.current = identity
     setError('')
     rpc<T>(name, JSON.parse(key))
       .then((d) => {

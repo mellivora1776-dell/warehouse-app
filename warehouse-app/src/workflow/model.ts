@@ -10,7 +10,14 @@ export const categoryLabels = {
   opening: '시작 재고',
 } as const
 export type Category = keyof typeof categoryLabels
-export const methods = ['직납', '화물', '방문'] as const
+export const methods = [
+  '직납',
+  '화물',
+  '방문',
+  '퀵',
+  '퀵·용차',
+  '용차',
+] as const
 export const decisions = {
   pending: '미검토',
   ready: '승인 대상',
@@ -72,6 +79,31 @@ export type Row = {
   batch_id: string | null
   confidence?: number | null
   read_reason?: string | null
+  resolution?:
+    | 'matched'
+    | 'unlinked'
+    | 'order_candidate'
+    | 'pick_only'
+    | 'reference'
+    | 'conflict'
+  stock_managed?: boolean
+  pick_required?: boolean
+  stock_qty?: number | null
+  pick_qty?: number | null
+  standard_name?: string
+  standard_spec?: string
+  match_basis?: string
+  variant?: string
+  variant_key?: string
+  product_kind?: string
+  context?: string
+  requester?: string
+  remarks?: string
+  packing?: string
+  method_raw?: string | null
+  posted_before?: number | null
+  posted_after?: number | null
+  analysis_reason?: string
 }
 export type Issue = {
   id: string
@@ -142,6 +174,7 @@ export type Movement = {
   approved_at: string | null
   corrects_entry: number | null
   related_document: string | null
+  method_raw?: string | null
   signed_qty: number | null
 }
 export type DocVersion = {
@@ -199,25 +232,70 @@ export function timeKo(value: string) {
 }
 export const qty = (q: number | null | undefined) =>
   q == null ? '미확인' : q.toLocaleString('ko-KR') + '개'
-export const rowLabel = (r: Pick<Row, 'category' | 'customer' | 'method'>) =>
+export const rowLabel = (
+  r: Pick<Row, 'category' | 'customer' | 'method' | 'method_raw' | 'requester'>,
+) =>
   r.category === 'sale'
-    ? [r.customer || '거래처 미확인', r.method || '방식 미확인'].join(' · ')
-    : categoryLabels[r.category]
+    ? [r.customer || '거래처 미확인', methodLabel(r) || '방식 미확인'].join(
+        ' · ',
+      )
+    : [categoryLabels[r.category], r.requester].filter(Boolean).join(' · ')
+export const standardName = (r: Row) => r.name || r.standard_name || r.raw_name
+export const methodLabel = (r: {
+  method: string | null
+  method_raw?: string | null
+}) =>
+  r.method_raw?.includes('용차') && r.method === '퀵·용차'
+    ? r.method_raw
+    : r.method
+export const pickCount = (r: Row) =>
+  r.pick_qty === undefined ? r.final_qty : r.pick_qty
+export const stockCount = (r: Row) =>
+  r.stock_managed === false
+    ? 0
+    : r.stock_qty === undefined
+      ? r.final_qty
+      : r.stock_qty
+export const completed = (r: Row) => Boolean(r.batch_id || r.entry_id)
+export function attention(r: Row) {
+  if (completed(r) || r.decision === 'exclude' || r.decision === 'hold')
+    return ''
+  if (r.stock_managed !== false && !r.item_id)
+    return r.resolution === 'order_candidate'
+      ? '주문품 SKU 등록 필요'
+      : '품목 연결 필요'
+  if (
+    r.final_qty == null ||
+    stockCount(r) == null ||
+    (r.pick_required && pickCount(r) == null)
+  )
+    return '수량 확인 필요'
+  if (r.category === 'sale' && (!r.method || !r.customer))
+    return !r.method ? '출고 방식 확인 필요' : '거래처 확인 필요'
+  if (r.stock_managed !== false && r.qty == null) return '현재고 미입력'
+  return ''
+}
 export function planned(rows: Row[]) {
   let incoming = 0,
     outgoing = 0
   for (const r of rows) {
-    if (r.entry_id || r.decision === 'hold' || r.decision === 'exclude')
+    if (completed(r) || r.decision === 'hold' || r.decision === 'exclude')
       continue
-    if (r.direction > 0) incoming += r.final_qty ?? 0
-    else outgoing += r.final_qty ?? 0
+    if (r.direction > 0) incoming += stockCount(r) ?? 0
+    else outgoing += stockCount(r) ?? 0
   }
   return { incoming, outgoing, net: incoming - outgoing }
 }
 export function grouped(rows: Row[]) {
   const groups = new Map<string, Row[]>()
   for (const r of rows) {
-    const key = r.item_id ?? JSON.stringify([r.raw_name, r.raw_sku, r.spec])
+    const key =
+      r.item_id ??
+      JSON.stringify([
+        r.resolution,
+        r.variant_key || r.standard_name || r.raw_name,
+        r.standard_spec || r.spec,
+      ])
     const group = groups.get(key) ?? []
     group.push(r)
     groups.set(key, group)

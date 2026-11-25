@@ -3,6 +3,10 @@ import { rpc } from '../db'
 import { useDebounce } from '../ui'
 import {
   qty,
+  stockCount,
+  pickCount,
+  completed,
+  rowLabel,
   timeKo,
   statuses,
   origins,
@@ -234,7 +238,10 @@ export function Evidence({
       item: { id: string; name: string }
     } | null>(null),
     [mapping, setMapping] = useState<Row | null>(null)
-  const upload = useTask()
+  const upload = useTask(),
+    cancelTask = useTask()
+  const [cancel, setCancel] = useState(false),
+    [why, setWhy] = useState('')
   const v = data?.versions.find((x) => x.id === id)
   return (
     <Sheet title="거래 근거와 버전" close={close}>
@@ -251,6 +258,52 @@ export function Evidence({
               {v.work_day} · {v.customer || '거래처 미지정'}
             </p>
           </div>
+          {admin &&
+            v &&
+            ['unlinked', 'current'].includes(v.status) &&
+            !data.settled.length &&
+            !v.lines.some(completed) && (
+              <details
+                className="expand"
+                open={cancel}
+                onToggle={(e) => setCancel(e.currentTarget.open)}
+              >
+                <summary>이 미승인 버전 취소</summary>
+                <form
+                  className="work-form"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    void cancelTask.run(async () => {
+                      await rpc('wm3_cancel', { p_doc: id, p_reason: why })
+                      saved?.()
+                      result.reload()
+                      setCancel(false)
+                    })
+                  }}
+                >
+                  <p>
+                    피킹과 마감 후보에서 빠집니다. 원문과 피킹 이력은
+                    보존됩니다.
+                  </p>
+                  <label>
+                    취소 사유
+                    <input
+                      value={why}
+                      required
+                      maxLength={1500}
+                      onChange={(e) => setWhy(e.target.value)}
+                    />
+                  </label>
+                  <ErrorText text={cancelTask.error} />
+                  <button
+                    className="quiet"
+                    disabled={cancelTask.busy || !why.trim()}
+                  >
+                    미승인 문서 취소 확정
+                  </button>
+                </form>
+              </details>
+            )}
           <Comparison versions={data.versions} />
           {v.status === 'reconcile' && (
             <section className="review-box">
@@ -267,7 +320,7 @@ export function Evidence({
                 const rows = v.lines.filter((l) => l.item_id === item),
                   posted = data.settled.filter((m) => m.item_id === item)
                 const target = rows.reduce(
-                    (n, r) => n + (r.read_qty ?? 0) * r.direction,
+                    (n, r) => n + (stockCount(r) ?? 0) * r.direction,
                     0,
                   ),
                   actual = posted.reduce((n, m) => n + (m.signed_qty ?? 0), 0)
@@ -276,11 +329,11 @@ export function Evidence({
                     <b>{rows[0]?.raw_name ?? posted[0]?.name}</b>
                     <div>
                       확정 순변동 {actual}개 · 지시 순변동{' '}
-                      {rows.some((r) => r.read_qty === null)
+                      {rows.some((r) => stockCount(r) == null)
                         ? '미확인'
                         : target + '개'}
                     </div>
-                    {!rows.some((r) => r.read_qty === null) && (
+                    {!rows.some((r) => stockCount(r) == null) && (
                       <small>
                         수량 차이 {target - actual > 0 ? '+' : ''}
                         {target - actual}개
@@ -305,7 +358,7 @@ export function Evidence({
                   </div>
                 )
               })}
-              {v.lines.some((x) => !x.item_id) && (
+              {v.lines.some((x) => x.stock_managed !== false && !x.item_id) && (
                 <p className="warn">SKU 미확정 품목은 별도로 확인해 주세요.</p>
               )}
             </section>
@@ -395,13 +448,26 @@ export function Evidence({
                   {l.spec && <small>{l.spec}</small>}
                   <div>
                     원문 {qty(l.read_qty)} · 검토 수량 {qty(l.final_qty)} ·{' '}
-                    {l.entry_id ? '승인 완료' : decisions[l.decision]}
+                    {completed(l) ? '승인 완료' : decisions[l.decision]}
                   </div>
-                  {admin && x.status === 'reconcile' && (
-                    <button className="quiet" onClick={() => setMapping(l)}>
-                      {l.item_id ? 'SKU 확인' : 'SKU 연결'}
-                    </button>
+                  <small>
+                    {l.standard_name || l.name} {l.standard_spec} ·{' '}
+                    {rowLabel(l)} · 준비 {qty(pickCount(l))} / 재고{' '}
+                    {qty(stockCount(l))}
+                  </small>
+                  {l.match_basis && <small>확정 근거 · {l.match_basis}</small>}
+                  {(l.packing || l.remarks) && (
+                    <small>
+                      {[l.packing, l.remarks].filter(Boolean).join(' · ')}
+                    </small>
                   )}
+                  {admin &&
+                    l.stock_managed !== false &&
+                    x.status === 'reconcile' && (
+                      <button className="quiet" onClick={() => setMapping(l)}>
+                        {l.item_id ? 'SKU 확인' : 'SKU 연결'}
+                      </button>
+                    )}
                   {l.read_reason && <small>{l.read_reason}</small>}
                   {l.confidence != null && (
                     <small>분석 신뢰도 {Math.round(l.confidence * 100)}%</small>
@@ -427,6 +493,8 @@ export function Evidence({
                     defer: '보류',
                     reconciled: '대조 완료',
                     dismiss: '제외',
+                    cancel: '미승인 문서 취소',
+                    alias: '별칭 확정',
                   }[a.action] ?? a.action}
                 </b>
                 <small>

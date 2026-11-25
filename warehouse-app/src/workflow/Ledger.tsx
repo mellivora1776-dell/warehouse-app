@@ -7,6 +7,7 @@ import {
   methods,
   origins,
   qty,
+  methodLabel,
   timeKo,
   today,
   type Movement,
@@ -25,7 +26,7 @@ function signed(m: Movement) {
 }
 function description(m: Movement) {
   return m.category === 'sale'
-    ? [m.customer, m.method].filter(Boolean).join(' · ')
+    ? [m.customer, methodLabel(m)].filter(Boolean).join(' · ')
     : categoryLabels[m.category]
 }
 function MovementDetail({

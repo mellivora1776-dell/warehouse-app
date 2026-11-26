@@ -69,7 +69,7 @@ class Analysis(unittest.TestCase):
         )
 
     def line(self, raw, n, **options):
-        return dict(line_id="1", raw_name=raw, qty=n, **options)
+        return {"line_id": "1", "raw_name": raw, "qty": n, **options}
 
     def preview(self, doc):
         return self.call("wm3_preview", doc)
@@ -258,13 +258,12 @@ class Analysis(unittest.TestCase):
     def test_04_orders_quick_methods_and_master_reuse(self):
         day = "2041-01-04"
         specs = [
-            ("KJ3AB-750 모터", "motor", 25, "태성FAN", "퀵(용차 배송)"),
-            ("KJ3AB-750 완성품", "finished", 25, None, None),
+            ("KJ3AB-750 완성품", "finished", 25, "태성FAN", "퀵(용차 배송)"),
             ("KJB3-5500", "finished", 12, "동원모터", "퀵"),
         ]
         items = {}
         for i, (name, kind, n, customer, method) in enumerate(specs):
-            raw = "KJ3AB-750 440-60" if i < 2 else "KJB3-5500 440/60"
+            raw = "KJ3AB-750 440-60" if i == 0 else "KJB3-5500 440/60"
             line = self.line(
                 raw,
                 n,
@@ -310,7 +309,7 @@ class Analysis(unittest.TestCase):
             self.assertEqual(fresh["item_id"], item)
         rows = self.read(day)["rows"]
         self.assertEqual({r["item_id"] for r in rows}, set(items.values()))
-        self.assertEqual(len(items), 3)
+        self.assertEqual(len(items), 2)
         for name, kind, n, customer, method in specs:
             subset = [r for r in rows if r["item_id"] == items[name]]
             self.assertEqual(
@@ -319,7 +318,12 @@ class Analysis(unittest.TestCase):
             )
             self.assertEqual(self.quantity(items[name]), 0)
         self.close(day)
-        self.assertEqual([self.quantity(v) for v in items.values()], [0, 25, 0])
+        self.assertEqual([self.quantity(v) for v in items.values()], [0, 0])
+        self.assertFalse(any("모터" in r["display_name"] for r in rows))
+        self.assertEqual(
+            {r["display_name"] for r in rows},
+            {"KJ3AB-750(440/60) [주문품]", "KJB3-5500(440/60) [주문품]"},
+        )
         moves = self.call("wm2_log", {"from": day, "to": day, "category": "sale"})[
             "rows"
         ]
@@ -461,6 +465,13 @@ class Analysis(unittest.TestCase):
             self.preview({**replace, "case_id": doc["case_id"]})["can_submit"]
         )
         self.submit(replace)
+        other = {
+            **replace,
+            "document_id": "parallel-claim",
+            "case_id": "parallel",
+            "source": {},
+        }
+        self.assertIn("WM4_REPLACED", self.call("wm3_preview", other, fail=True))
         self.assertEqual(len(self.read(day)["rows"]), 1)
         self.close(day)
         balance = self.quantity(self.master["KTB-032T"])
@@ -477,6 +488,42 @@ class Analysis(unittest.TestCase):
         self.assertEqual(self.quantity(self.master["KTB-032T"]), balance)
         self.assertEqual(len(self.call("wm2_log", {"from": day, "to": day})["rows"]), 1)
         self.assertTrue(self.read(day)["issues"])
+        self.assertIn("WM4_REPLACED", self.call("wm3_preview", other, fail=True))
+
+    def test_cancelled_document_split_preserves_distinct_lines(self):
+        day = "2041-01-12"
+        source = self.doc(
+            day,
+            "split-origin",
+            [
+                self.line("KTB-032T", 1, line_id="A"),
+                self.line("KJB3-2600", 1, line_id="B"),
+            ],
+            customer="방문 고객",
+            method="방문",
+        )
+        original = self.submit(source)
+        self.call("wm3_cancel", original["id"], "원본 두 지시 분리")
+        for line in source["lines"]:
+            doc = self.doc(
+                day,
+                "split-" + line["line_id"],
+                [line],
+                customer="방문 고객",
+                method="방문",
+                supersedes_cancelled=[source["document_id"]],
+            )
+            self.submit(doc)
+            self.assertTrue(self.submit(doc)["duplicate"])
+        self.assertEqual(
+            sorted(r["line_key"] for r in self.read(day)["rows"]), ["A", "B"]
+        )
+        clone = {
+            **doc,
+            "case_id": "split-duplicate",
+            "document_id": "split-duplicate/v1",
+        }
+        self.assertIn("WM4_REPLACED", self.call("wm3_preview", clone, fail=True))
 
     def test_08_scope_validation_and_credentials(self):
         day = "2041-01-08"
@@ -583,6 +630,30 @@ class Analysis(unittest.TestCase):
         )
         direct["document_type"] = "일반 지시서"
         self.assertIsNone(self.preview(direct)["lines"][0]["method"])
+
+    def test_catalog_names_and_separate_instruction_identity(self):
+        labels = self.sql(
+            """select warehouse_master.product_label(name,spec,ordered) from
+          (values ('KJ3AB-750 완성품','380V·60Hz',false),('KJ3AB-750 모터','',false),
+          ('KJ3AB-750 완성품','440V·60Hz',true),('KJ3AB-750 모터','440/60',true)) v(name,spec,ordered)"""
+        ).splitlines()
+        self.assertEqual(
+            labels,
+            [
+                "KJ3AB-750",
+                "KJ3AB-750 모터",
+                "KJ3AB-750(440/60) [주문품]",
+                "KJ3AB-750(440/60) 모터 [주문품]",
+            ],
+        )
+        rows = self.call("wm4_catalog", "2F-D-11", actor=legacy.STAFF)
+        self.assertEqual(rows[0]["display_name"], "KJ3AB-750 모터")
+        self.assertEqual(
+            self.call("wm_item", rows[0]["id"])["display_name"], rows[0]["display_name"]
+        )
+        self.assertIn(
+            "permission denied", self.call("wm4_catalog", "", actor=None, fail=True)
+        )
 
     def test_09_skill_and_site_contract(self):
         guide = (

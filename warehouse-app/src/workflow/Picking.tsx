@@ -35,6 +35,7 @@ export function Picking({
   const rows = (result.data?.rows || []).filter(
     (r) =>
       !completed(r) &&
+      !r.related_hold &&
       r.doc_status === 'current' &&
       (r.pick_required ??
         (r.direction < 0 && ['sale', 'production_out'].includes(r.category))) &&
@@ -44,7 +45,9 @@ export function Picking({
   for (const r of rows) {
     const k =
       view === 'customer'
-        ? r.customer || r.requester || '생산 작업'
+        ? r.category === 'sale'
+          ? r.customer || '거래처 미확인'
+          : '생산 작업'
         : view === 'case'
           ? r.case_id || r.document_id
           : 'all'
@@ -108,8 +111,10 @@ export function Picking({
               {view === 'customer' && <h2>{key}</h2>}
               {view === 'case' && (
                 <h2>
-                  {list[0].customer || list[0].requester || '생산 작업'} · 지시{' '}
-                  {i + 1}
+                  {list[0].category === 'sale'
+                    ? list[0].customer || '거래처 미확인'
+                    : '생산 작업'}{' '}
+                  · 지시 {i + 1}
                 </h2>
               )}
               {grouped(list)
@@ -127,7 +132,6 @@ export function Picking({
                   const f = g[0],
                     racks = rackList(f),
                     name = standardName(f),
-                    spec = f.item_spec || f.standard_spec || f.spec,
                     total = g.every((r) => pickCount(r) != null)
                       ? g.reduce((n, r) => n + (pickCount(r) || 0), 0)
                       : null
@@ -146,18 +150,12 @@ export function Picking({
                             : '랙 미등록'}
                       </div>
                       <div className="pick-heading">
-                        <h3>
-                          {name}
-                          {f.variant === 'order' && <small>주문품</small>}
-                        </h3>
+                        <h3>{name}</h3>
                         <strong>
                           {g.length > 1 ? '총 ' : ''}
                           {qty(total)}
                         </strong>
                       </div>
-                      {spec && spec !== name && (
-                        <div className="minor-spec">{spec}</div>
-                      )}
                       {f.stock_managed === false ? (
                         <small className="nonstock">
                           피킹 전용 · 재고 차감 없음
@@ -171,15 +169,13 @@ export function Picking({
                           재고 부족 · 현재 {qty(f.qty)}
                         </small>
                       ) : null}
-                      {g.map((r) => (
+                      {g.map((r, idx) => (
                         <div className="pick-instruction" key={r.id}>
                           <label className="pick-check">
                             <span>
                               {rowLabel(r)}
-                              {r.category === 'sale' &&
-                              r.requester &&
-                              r.requester !== r.customer
-                                ? ' · ' + r.requester
+                              {g.length > 1 && r.category !== 'sale'
+                                ? ' · 지시 ' + (idx + 1)
                                 : ''}
                               {(r.packing ||
                                 r.remarks ||
@@ -205,7 +201,13 @@ export function Picking({
                               <input
                                 type="checkbox"
                                 aria-label={
-                                  name + ' 피킹 완료 · ' + rowLabel(r)
+                                  name +
+                                  ' 피킹 완료 · ' +
+                                  rowLabel(r) +
+                                  ' · 지시 ' +
+                                  (idx + 1) +
+                                  ' · ' +
+                                  qty(pickCount(r))
                                 }
                                 disabled={
                                   task.busy ||

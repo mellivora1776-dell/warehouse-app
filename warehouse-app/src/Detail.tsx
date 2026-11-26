@@ -112,12 +112,7 @@ export function Detail({ id, user, admin, close, saved }: Props) {
           <Status>품목을 불러오는 중…</Status>
         ) : (
           <>
-            <h2 className="item-title">{info.name}</h2>
-            {(info.sku || info.spec) && (
-              <p className="small-meta">
-                {[info.sku, info.spec].filter(Boolean).join(' · ')}
-              </p>
-            )}
+            <h2 className="item-title">{info.display_name}</h2>
             <div className="balance">
               <span>현재고</span>
               <strong>
@@ -252,7 +247,12 @@ function Editor({
         ))}
       </div>
       {kind !== 'count' ? (
-        <ManualForm key={kind} item={item} flow={kind} onSaved={() => {}} />
+        <ManualForm
+          key={kind}
+          item={item}
+          flow={kind}
+          onSaved={() => update('일일 마감에 승인 대기 거래를 등록했습니다.')}
+        />
       ) : (
         <form onSubmit={submit}>
           {item.qty === null && (

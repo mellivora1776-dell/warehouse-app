@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Evidence } from './Evidence'
 import { rpc } from '../db'
 import {
   type Row,
@@ -26,7 +27,7 @@ export function Review({
 }) {
   const [item, setItem] = useState({
       id: row.item_id,
-      name: row.name,
+      name: row.display_name || row.name,
       qty: row.qty,
     }),
     [search, setSearch] = useState(!row.item_id && row.stock_managed !== false),
@@ -57,6 +58,7 @@ export function Review({
     [first, setFirst] = useState(''),
     [ordered, setOrdered] = useState(true),
     [checked, setChecked] = useState(false)
+  const [evidence, setEvidence] = useState(false)
   const reconcile = row.doc_status === 'reconcile'
   const task = useTask(() => {
     saved()
@@ -72,7 +74,7 @@ export function Review({
     },
   ])
   function select(i: SKU) {
-    setItem(i)
+    setItem({ ...i, name: i.display_name })
     setSearch(false)
     setReg(false)
   }
@@ -419,6 +421,12 @@ export function Review({
             {reconcile ? 'SKU 연결 확정' : '검토 저장'}
           </button>
         </form>
+      )}
+      <button className="textbtn" onClick={() => setEvidence(true)}>
+        거래 근거 보기
+      </button>
+      {evidence && (
+        <Evidence id={row.document_id} admin close={() => setEvidence(false)} />
       )}
     </Sheet>
   )

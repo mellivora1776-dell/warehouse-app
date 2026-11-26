@@ -263,7 +263,7 @@ try {
   }
   await navigate(a, true, 'picking', '피킹리스트')
   await a.getByLabel('출고 날짜').fill(day)
-  await a.getByLabel(item.name + ' 피킹 완료').click()
+  await a.getByLabel(detail.display_name + ' 피킹 완료').click()
   assert.ok(await a.getByRole('checkbox').isChecked())
   await fits(a)
   const newer = {
@@ -291,26 +291,20 @@ try {
   }
   assert.equal((await send(internal)).status, 201)
   await navigate(a, true, 'daily', '일일 마감')
-  const card = a.locator('.close-item').filter({ hasText: item.name })
-  await card.locator('summary').click()
+  const card = a.locator('.day-item').filter({ hasText: detail.display_name })
   await card.getByText('생산출고', { exact: true }).waitFor()
-  assert.equal(await a.locator('.close-item').count(), 1)
-  const trades = card.locator('.trade')
-  await trades
-    .filter({ hasText: '시험 거래처 · 직납' })
-    .getByRole('button', { name: '거래 검토' })
-    .click()
+  // The prior pick was changed by a revision; this is the only transaction requiring a decision.
+  await a.locator('.attention-list .issue-row').first().click()
   let dialog = a.getByRole('dialog', { name: '거래 검토' })
   await dialog.getByLabel('검토 수량').fill('2')
   await dialog.getByText(/현재 10개 → 예상 6개/).waitFor()
   await fits(a)
   await dialog.getByRole('button', { name: '검토 저장' }).click()
   await dialog.waitFor({ state: 'hidden' })
-  if (!(await card.evaluate((e) => e.open)))
-    await card.locator('summary').click()
-  await trades
+  await card
+    .locator('.day-trade')
     .filter({ hasText: '생산출고' })
-    .getByRole('button', { name: '거래 검토' })
+    .getByRole('button')
     .click()
   dialog = a.getByRole('dialog', { name: '거래 검토' })
   await dialog.getByLabel('검토 수량').fill('1')
@@ -318,18 +312,26 @@ try {
   await dialog.getByRole('button', { name: '검토 저장' }).click()
   await dialog.waitFor({ state: 'hidden' })
   await card
-    .locator('.close-numbers span')
-    .filter({ hasText: '예상 마감' })
-    .getByText('7', { exact: true })
+    .locator('.day-trade')
+    .filter({ hasText: '시험 거래처 · 직납' })
+    .getByText('−2개', { exact: true })
+    .waitFor()
+  await card
+    .locator('.day-trade')
+    .filter({ hasText: '생산출고' })
+    .getByText('−1개', { exact: true })
     .waitFor()
   if (process.env.WM_QA_REVIEW_PNG)
     await a.screenshot({ path: process.env.WM_QA_REVIEW_PNG, fullPage: true })
   await fits(a)
-  const stock = s.getByRole('button', { name: new RegExp(item.name) })
+  const stock = s.getByRole('button', {
+    name: new RegExp(
+      detail.display_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    ),
+  })
   await stock.waitFor()
   assert.match(await stock.textContent(), /10대/)
-  await a.getByRole('button', { name: '일일 마감 승인', exact: true }).click()
-  await a.getByRole('button', { name: '확인하고 마감 확정' }).click()
+  await a.getByRole('button', { name: /일일 마감 승인/ }).click()
   await a.getByText(/1차 마감을 저장했습니다/).waitFor()
   await s.reload()
   await stock.waitFor()
@@ -350,7 +352,7 @@ try {
   await s.getByLabel('영업출고 일자').fill(day)
   await s.getByLabel('출고 방식').selectOption('직납')
   const movement = s.locator('.movement-row')
-  await movement.getByText(item.name).waitFor()
+  await movement.getByText(detail.display_name).waitFor()
   assert.match(await movement.textContent(), /2개/)
   await movement.click()
   await s
@@ -362,7 +364,25 @@ try {
     0,
   )
   await navigate(a, true, 'stock', '재고 조회')
-  const selected = a.getByRole('button', { name: new RegExp(item.name) })
+  const selected = a.getByRole('button', {
+    name: new RegExp(
+      detail.display_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    ),
+  })
+  const sortBox = a.getByLabel('재고 정렬')
+  for (const mode of ['name', 'few', 'many', 'rack', 'excel']) {
+    await sortBox.selectOption(mode)
+    if (mode === 'few' || mode === 'many') {
+      const values = await a.locator('.stock-row .qty').allTextContents()
+      const known = values
+        .filter((v) => v !== '미확인')
+        .map((v) => Number(v.replace(/[^0-9]/g, '')))
+      assert.deepEqual(
+        known,
+        [...known].sort((x, y) => (mode === 'few' ? x - y : y - x)),
+      )
+    }
+  }
   await selected.click()
   let itemSheet = a.getByRole('dialog')
   await itemSheet.getByRole('button', { name: '출고', exact: true }).click()
@@ -373,7 +393,36 @@ try {
   await itemSheet.getByLabel('대상 날짜').fill(day)
   await itemSheet.getByLabel('출고할 수량').fill('1')
   await itemSheet.getByRole('button', { name: '일일 마감 후보 등록' }).click()
-  await itemSheet.getByText(/검토 후보를 등록했습니다/).waitFor()
+  await itemSheet.getByText(/승인 대기 거래를 등록했습니다/).waitFor()
+  assert.equal((await rpc('wm_item', { p_item: item.id })).qty, 7)
+  const pending = itemSheet
+    .locator('.pending-records .day-trade')
+    .filter({ hasText: day })
+  await pending.getByRole('button', { name: '수정', exact: true }).click()
+  const pendingEditor = a.getByRole('dialog', { name: '거래 검토' })
+  await pendingEditor.getByLabel('검토 수량').fill('3')
+  await pendingEditor.getByRole('button', { name: '검토 저장' }).click()
+  await pending.getByText('3개', { exact: true }).waitFor()
+  await pending.getByRole('button', { name: '삭제', exact: true }).click()
+  const drop = a.getByRole('dialog', { name: '마감 전 거래 삭제' })
+  await drop.getByLabel('삭제 사유').fill('시험 지시 제외')
+  await drop.getByRole('button', { name: '삭제 확정' }).click()
+  await pending.waitFor({ state: 'hidden' })
+  const settled = itemSheet
+    .locator('.ledger-line')
+    .filter({ hasText: day })
+    .filter({ hasText: '시험 거래처 · 직납' })
+  await settled.getByRole('button', { name: '수정', exact: true }).click()
+  const amendment = a.getByRole('dialog', { name: '확정 기록 수정' })
+  await amendment.getByLabel('기록에 표시할 수량').fill('1')
+  await amendment.getByLabel('수정 사유').fill('시험 표시 수량')
+  await amendment.getByRole('button', { name: '기록 수정 저장' }).click()
+  await settled.getByText('-1개', { exact: true }).waitFor()
+  await settled.getByRole('button', { name: '삭제', exact: true }).click()
+  const deletion = a.getByRole('dialog', { name: '확정 기록 삭제' })
+  await deletion.getByLabel('삭제 사유').fill('시험 확정 기록 삭제')
+  await deletion.getByRole('button', { name: '기록 삭제 확정' }).click()
+  await settled.getByText('기록 삭제', { exact: true }).waitFor()
   assert.equal((await rpc('wm_item', { p_item: item.id })).qty, 7)
   await itemSheet.getByRole('button', { name: '실사 수량 수정' }).click()
   await itemSheet.getByLabel(/직접 센 최종 수량/).fill('5')

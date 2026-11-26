@@ -103,6 +103,14 @@ export type Row = {
   method_raw?: string | null
   posted_before?: number | null
   posted_after?: number | null
+  display_name?: string
+  check_reason?: string
+  related_hold?: boolean
+  record_rev?: number
+  record_deleted?: boolean
+  record_qty?: number | null
+  record_customer?: string
+  record_method_raw?: string | null
   analysis_reason?: string
 }
 export type Issue = {
@@ -137,6 +145,7 @@ export type DayData = {
   }[]
 }
 export type SKU = {
+  display_name: string
   id: string
   name: string
   qty: number | null
@@ -175,6 +184,14 @@ export type Movement = {
   corrects_entry: number | null
   related_document: string | null
   method_raw?: string | null
+  display_name: string
+  record_rev: number
+  record_deleted: boolean
+  record_qty: number | null
+  record_signed_qty: number | null
+  record_customer: string | null
+  record_method: string | null
+  record_method_raw: string | null
   signed_qty: number | null
 }
 export type DocVersion = {
@@ -239,8 +256,9 @@ export const rowLabel = (
     ? [r.customer || '거래처 미확인', methodLabel(r) || '방식 미확인'].join(
         ' · ',
       )
-    : [categoryLabels[r.category], r.requester].filter(Boolean).join(' · ')
-export const standardName = (r: Row) => r.name || r.standard_name || r.raw_name
+    : categoryLabels[r.category]
+export const standardName = (r: Row) =>
+  r.display_name || r.name || r.standard_name || r.raw_name
 export const methodLabel = (r: {
   method: string | null
   method_raw?: string | null
@@ -260,6 +278,7 @@ export const completed = (r: Row) => Boolean(r.batch_id || r.entry_id)
 export function attention(r: Row) {
   if (completed(r) || r.decision === 'exclude' || r.decision === 'hold')
     return ''
+  if (r.check_reason !== undefined) return r.check_reason
   if (r.stock_managed !== false && !r.item_id)
     return r.resolution === 'order_candidate'
       ? '주문품 SKU 등록 필요'
@@ -279,7 +298,12 @@ export function planned(rows: Row[]) {
   let incoming = 0,
     outgoing = 0
   for (const r of rows) {
-    if (completed(r) || r.decision === 'hold' || r.decision === 'exclude')
+    if (
+      completed(r) ||
+      r.related_hold ||
+      r.decision === 'hold' ||
+      r.decision === 'exclude'
+    )
       continue
     if (r.direction > 0) incoming += stockCount(r) ?? 0
     else outgoing += stockCount(r) ?? 0

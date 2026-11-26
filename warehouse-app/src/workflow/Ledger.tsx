@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ChevronRight, SlidersHorizontal } from 'lucide-react'
 import { Empty, PageEnd, Refresh, SearchBox, useDebounce, usePage } from '../ui'
-import { Sheet } from './shared'
+import { Sheet, useData, Loading } from './shared'
 import {
   categoryLabels,
   methods,
@@ -11,22 +11,31 @@ import {
   timeKo,
   today,
   type Movement,
+  type Row,
+  standardName,
+  rowLabel,
 } from './model'
 import { Evidence } from './Evidence'
-import { ManualForm } from './ManualForm'
+import {
+  RecordEdit,
+  AmendmentHistory,
+  movementTarget,
+  Disposition,
+} from './RecordEdit'
+import { Review } from './Review'
 import { BatchDetails } from './Day'
 
 function signed(m: Movement) {
-  if (m.kind === 'opening') return qty(m.after_qty)
-  if (m.signed_qty == null)
-    return m.kind === 'count' ? qty(m.after_qty) : '미확인'
-  return (
-    (m.signed_qty > 0 ? '+' : '') + m.signed_qty.toLocaleString('ko-KR') + '개'
-  )
+  if (m.record_deleted) return '기록 삭제'
+  if (m.kind === 'opening' || m.kind === 'count') return qty(m.record_qty)
+  const n = m.record_signed_qty
+  return n == null ? '미확인' : (n > 0 ? '+' : '') + qty(n)
 }
 function description(m: Movement) {
   return m.category === 'sale'
-    ? [m.customer, methodLabel(m)].filter(Boolean).join(' · ')
+    ? [m.record_customer, m.record_method_raw || m.record_method]
+        .filter(Boolean)
+        .join(' · ')
     : categoryLabels[m.category]
 }
 function MovementDetail({
@@ -38,18 +47,14 @@ function MovementDetail({
   admin: boolean
   close: () => void
 }) {
-  const [view, setView] = useState(''),
-    [notice, setNotice] = useState('')
+  const [view, setView] = useState('')
   return (
     <Sheet title="확정 수불 상세" close={close}>
       <div className="document-head">
         <span>
           {m.work_day} · {categoryLabels[m.category]}
         </span>
-        <h2>{m.name}</h2>
-        <p>
-          {[m.sku !== m.name ? m.sku : '', m.spec].filter(Boolean).join(' · ')}
-        </p>
+        <h2>{m.display_name}</h2>
       </div>
       <dl className="facts">
         <dt>수불 내역</dt>
@@ -59,7 +64,7 @@ function MovementDetail({
         </dd>
         <dt>수량</dt>
         <dd>{signed(m)}</dd>
-        <dt>변경 전 → 후</dt>
+        <dt>원승인 당시 재고</dt>
         <dd>
           {qty(m.before_qty)} → {qty(m.after_qty)}
         </dd>
@@ -110,30 +115,8 @@ function MovementDetail({
             {m.sequence}차 마감 검토표
           </button>
         )}
-        {admin && m.batch_id && (
-          <button className="quiet" onClick={() => setView('correct')}>
-            별도 정정 거래
-          </button>
-        )}
       </div>
-      {notice && (
-        <p className="callout" role="status">
-          {notice}
-        </p>
-      )}
-      {view === 'correct' && (
-        <Sheet title="별도 정정 거래" close={() => setView('')}>
-          <ManualForm
-            item={{ id: m.item_id, name: m.name }}
-            flow="correction"
-            original={m}
-            onSaved={() => {
-              setView('')
-              setNotice('정정 거래가 일일 마감 검토 대상으로 등록됐습니다.')
-            }}
-          />
-        </Sheet>
-      )}
+      {m.record_rev > 0 && <AmendmentHistory target={movementTarget(m)} />}
       {view === 'batch' && m.batch_id && (
         <BatchDetails id={m.batch_id} close={() => setView('')} />
       )}
@@ -169,11 +152,14 @@ export function Ledger({
   const search = useDebounce(query),
     client = useDebounce(customer),
     invalid = Boolean(from && to && from > to)
+  const [refresh, setRefresh] = useState(0),
+    [edit, setEdit] = useState<{ m: Movement; deleting: boolean } | null>(null)
   const page = usePage<Movement>(
     'wm2_log',
     {
       p_filters: {
         item: itemId,
+        sales,
         category: sales ? 'sale' : cat,
         from,
         to,
@@ -185,7 +171,7 @@ export function Ledger({
     },
     'p_after',
     (r) => r.id,
-    version,
+    version + refresh,
   )
   const filters = (
     <>
@@ -282,6 +268,14 @@ export function Ledger({
           />
         </>
       )}
+      {itemId && (
+        <PendingRecords
+          itemId={itemId}
+          admin={admin}
+          version={version + refresh}
+          reload={() => setRefresh((v) => v + 1)}
+        />
+      )}
       <details className="expand ledger-filters" open={sales || undefined}>
         <summary>
           <SlidersHorizontal size={15} /> 기간·조회 조건
@@ -297,35 +291,65 @@ export function Ledger({
             <span>{sales ? '출고수량' : '수량'}</span>
           </div>
           {page.rows.map((m) => (
-            <button
-              key={m.id}
-              className="movement-row"
-              onClick={() => setSelected(m)}
-            >
-              <span>
-                <small>
-                  {m.work_day}
-                  {m.corrects_entry ? ' · 정정' : ''}
-                  {m.origin === 'manual' && m.document_id ? ' · 수기' : ''}
-                </small>
-                <strong>{sales ? description(m) : m.name}</strong>
-                <span>{sales ? m.name : description(m)}</span>
-                {sales && m.spec && <small>{m.spec}</small>}
-              </span>
-              <b>
-                {sales && m.signed_qty != null
-                  ? (m.signed_qty > 0 ? '복원 ' : '') +
-                    qty(Math.abs(m.signed_qty))
-                  : signed(m)}
-              </b>
-              <ChevronRight size={15} />
-            </button>
+            <div key={m.id} className="ledger-line">
+              <button
+                key={m.id}
+                className="movement-row"
+                onClick={() => setSelected(m)}
+              >
+                <span>
+                  <small>
+                    {m.work_day}
+                    {m.corrects_entry ? ' · 정정' : ''}
+                    {m.origin === 'manual' && m.document_id ? ' · 수기' : ''}
+                  </small>
+                  <strong>{sales ? description(m) : m.display_name}</strong>
+                  <span>
+                    {sales ? m.display_name : description(m)}
+                    {m.record_rev > 0 && ' · 기록 변경'}
+                  </span>
+                </span>
+                <b>
+                  {sales && m.record_signed_qty != null
+                    ? (m.record_signed_qty > 0 ? '복원 ' : '') +
+                      qty(Math.abs(m.record_signed_qty))
+                    : signed(m)}
+                </b>
+                <ChevronRight size={15} />
+              </button>
+              {admin && m.kind !== 'opening' && (
+                <div className="record-actions">
+                  <button
+                    className="record-action"
+                    onClick={() => setEdit({ m, deleting: false })}
+                  >
+                    {m.record_deleted ? '기록 복구' : '수정'}
+                  </button>
+                  {!m.record_deleted && (
+                    <button
+                      className="record-action"
+                      onClick={() => setEdit({ m, deleting: true })}
+                    >
+                      삭제
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           ))}
           {!page.loading && !page.error && !page.rows.length && (
             <Empty title="조회 조건에 맞는 확정 기록이 없습니다" />
           )}
           <PageEnd page={page} />
         </>
+      )}
+      {edit && (
+        <RecordEdit
+          target={movementTarget(edit.m)}
+          deleting={edit.deleting}
+          close={() => setEdit(null)}
+          saved={() => setRefresh((v) => v + 1)}
+        />
       )}
       {selected && (
         <MovementDetail
@@ -335,5 +359,61 @@ export function Ledger({
         />
       )}
     </>
+  )
+}
+
+function PendingRecords({
+  itemId,
+  admin,
+  version,
+  reload,
+}: {
+  itemId: string
+  admin: boolean
+  version: number
+  reload: () => void
+}) {
+  const data = useData<Row[]>('wm4_pending', { p_item: itemId }, version)
+  const [edit, setEdit] = useState<Row | null>(null),
+    [del, setDel] = useState<Row | null>(null)
+  if (!data.data) return <Loading error={data.error} retry={data.reload} />
+  if (!data.data.length) return null
+  return (
+    <section className="pending-records">
+      <h4>마감 전 거래</h4>
+      {data.data.map((r) => (
+        <div className="day-trade" key={r.id}>
+          <span>
+            <small>
+              {r.work_day} ·{' '}
+              {r.decision === 'hold' || r.related_hold ? '보류' : '승인 대기'}
+            </small>
+            {rowLabel(r)}
+          </span>
+          <b>{qty(r.final_qty)}</b>
+          {admin && (
+            <div className="record-actions">
+              <button className="record-action" onClick={() => setEdit(r)}>
+                수정
+              </button>
+              <button className="record-action" onClick={() => setDel(r)}>
+                삭제
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+      {edit && (
+        <Review
+          row={edit}
+          all={data.data.filter((r) => r.work_day === edit.work_day)}
+          close={() => setEdit(null)}
+          saved={reload}
+        />
+      )}
+      {del && (
+        <Disposition row={del} close={() => setDel(null)} saved={reload} />
+      )}
+    </section>
   )
 }

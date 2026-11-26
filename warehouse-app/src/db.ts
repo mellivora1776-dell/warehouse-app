@@ -6,9 +6,14 @@ export type Item = {
   qty: number | null
   sku?: string | null
   spec?: string | null
+  display_name: string
+  racks: string[]
   ordinal: number
 }
-export type Detail = Pick<Item, 'id' | 'name' | 'qty' | 'sku' | 'spec'> & {
+export type Detail = Pick<
+  Item,
+  'id' | 'name' | 'qty' | 'sku' | 'spec' | 'display_name'
+> & {
   revision: number
   racks: string[]
 }
@@ -85,7 +90,12 @@ export function message(err: unknown): string {
       WM3_BLOCKED:
         '입력 내용이 현장 규칙과 충돌합니다. 사전 검증 결과를 확인하세요.',
       WM3_CANCEL_FIRST: '대체할 문서의 취소 상태를 확인하세요.',
-      WM3_CORRECTION_ONLY: '승인 이력이 있는 건은 별도 정정 거래로 처리하세요.',
+      WM3_CORRECTION_ONLY:
+        '이미 승인된 건입니다. 변경 기록에서 원승인과 대조하세요.',
+      WM4_RECORD_ONLY:
+        '품목 변경 기록에서 수정하세요. 현재고 조정은 실사에서 처리합니다.',
+      WM4_REPLACED:
+        '이 취소 건에는 유효한 대체 문서가 있습니다. 기존 건의 최신 버전을 확인하세요.',
       WM3_VARIANT: '기본·주문 구분, 모터·완성품과 사양을 확인하세요.',
       WM3_ALIAS_CONFLICT: '같은 문맥에 다른 별칭이 이미 있습니다.',
       WM2_FILE_USED: '이 파일은 이미 다른 문서에 연결되어 있습니다.',

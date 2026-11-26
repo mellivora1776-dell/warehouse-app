@@ -126,6 +126,7 @@ class Workflow(unittest.TestCase):
         before = cls.sql(digest)
         cls.sql((ROOT / "supabase/04_workflow_v2.sql").read_text())
         cls.sql((ROOT / "supabase/05_analysis.sql").read_text())
+        cls.sql((ROOT / "supabase/06_records.sql").read_text())
         assert before == cls.sql(
             digest
         ), "Migration changed baseline inventory or ledger"
@@ -241,29 +242,29 @@ class Workflow(unittest.TestCase):
             "rows"
         ][0]
         self.call(
-            "wm2_manual",
-            self.ids[name],
-            day,
-            "sale",
-            2,
-            str(uuid.uuid4()),
-            "",
-            None,
-            "in",
-            "실제 4개 반출",
+            "wm4_amend",
             original["id"],
-            v3["id"],
+            None,
+            0,
+            4,
+            "시험 거래처",
+            "직납",
+            "기록에 실제 출고 4대 표시",
+            str(uuid.uuid4()),
         )
-        self.call("wm2_resolve", v3["id"], "reconciled", None, "수량 확인 후 별도 정정")
-        pending = next(w for w in self.read(day)["rows"] if not w["entry_id"])
-        self.review(pending)
-        self.assertEqual(self.approve(day)["sequence"], 2)
-        self.assertEqual(self.qty(name), 36)
+        self.call("wm2_resolve", v3["id"], "reconciled", None, "원승인 대조 완료")
+        self.assertEqual(self.qty(name), 34)
+        self.assertFalse(
+            [
+                r
+                for r in self.call("wm4_pending", self.ids[name])
+                if r["work_day"] == day
+            ]
+        )
         logs = self.call("wm2_log", {"item": self.ids[name], "category": "sale"})[
             "rows"
         ]
-        self.assertEqual(len(logs), 2)
-        self.assertEqual(logs[0]["corrects_entry"], original["id"])
+        self.assertEqual([(m["amount"], m["record_qty"]) for m in logs], [(6, 4)])
 
     def test_multiple_transactions_group_and_close(self):
         day = "2031-01-02"
@@ -593,10 +594,10 @@ class Workflow(unittest.TestCase):
         facts = self.call("wm2_document", v2["id"])
         self.assertEqual([m["id"] for m in facts["settled"]], [original["id"]])
         self.assertIn(
-            "WM2_REASON",
+            "WM4_RECORD_ONLY",
             self.call(
                 "wm2_manual",
-                self.ids["QA-20"],
+                self.ids["QA-19"],
                 day,
                 "sale",
                 2,
@@ -604,31 +605,150 @@ class Workflow(unittest.TestCase):
                 "",
                 None,
                 "out",
-                "추가 품목 확인",
+                "별도 SKU",
                 original["id"],
                 v2["id"],
                 fail=True,
             ),
         )
-        self.call(
-            "wm2_manual",
-            self.ids["QA-19"],
-            day,
-            "sale",
-            2,
+        self.call("wm2_resolve", v2["id"], "reconciled", None, "실제 수량은 별도 실사")
+        self.assertEqual(self.qty("QA-19"), 40)
+        self.assertEqual(len(self.call("wm2_document", v1["id"])["settled"]), 1)
+
+    def test_record_edits_holds_and_stocktakes(self):
+        day = "2031-01-10"
+        name = "QA-22"
+        sku = self.ids[name]
+        for key, n, reason in [
+            ("ready", 5, ""),
+            ("delete", 2, ""),
+            ("verify", 3, "최종 출고 수량이 3대인지 5대인지 확인 필요"),
+        ]:
+            self.call(
+                "wm2_import",
+                self.doc(
+                    day,
+                    name,
+                    n,
+                    key="records-" + key,
+                    lines=[
+                        dict(line_id="1", raw_name=name, qty=n, review_reason=reason)
+                    ],
+                ),
+            )
+        rows = {r["case_key"]: r for r in self.read(day)["rows"]}
+        self.review(rows["records-ready"], qty=3)
+        self.assertIn("WM2_REVIEW_FIRST", self.approve(day, True))
+        for key, decision in [("delete", "exclude"), ("verify", "hold")]:
+            r = rows["records-" + key]
+            self.call("wm4_dispose", r["id"], r["rev"], decision, "관리자 확인")
+        self.assertEqual(
+            sorted(r["final_qty"] for r in self.call("wm4_pending", sku)), [3, 3]
+        )
+        self.assertEqual(self.qty(name), 40)
+        self.assertEqual(self.approve(day)["count"], 1)
+        self.assertEqual(self.qty(name), 37)
+        logs = lambda: self.call("wm2_log", {"from": day, "to": day, "item": sku})[
+            "rows"
+        ]
+        entry = logs()[0]["id"]
+        args = [
+            entry,
+            None,
+            0,
+            1,
+            "변경 거래처",
+            "방문",
+            "문서에 수량 정정",
             str(uuid.uuid4()),
+        ]
+        self.assertIn(
+            "WM_READ_ONLY", self.call("wm4_amend", *args, actor=STAFF, fail=True)
+        )
+        self.assertFalse(self.call("wm4_amend", *args)["duplicate"])
+        self.assertTrue(self.call("wm4_amend", *args)["duplicate"])
+        self.assertEqual(
+            (
+                logs()[0]["amount"],
+                logs()[0]["record_qty"],
+                logs()[0]["record_signed_qty"],
+            ),
+            (3, 1, -1),
+        )
+        self.assertEqual(
+            len(
+                self.call(
+                    "wm2_log",
+                    {
+                        "sales": True,
+                        "from": day,
+                        "to": day,
+                        "method": "방문",
+                        "customer": "변경",
+                    },
+                )["rows"]
+            ),
+            1,
+        )
+        self.assertIn(
+            "WM_STALE", self.call("wm4_amend", *args[:-1], str(uuid.uuid4()), fail=True)
+        )
+        self.call(
+            "wm4_amend",
+            entry,
+            None,
+            1,
+            None,
+            "",
+            "방문",
+            "기록 삭제",
+            str(uuid.uuid4()),
+        )
+        self.assertTrue(logs()[0]["record_deleted"])
+        self.assertFalse(
+            self.call("wm2_log", {"sales": True, "from": day, "to": day})["rows"]
+        )
+        self.assertEqual(self.qty(name), 37)
+        self.assertEqual(len(self.call("wm4_amendments", entry, None, actor=STAFF)), 2)
+        held = self.call("wm4_pending", sku)[0]
+        self.review(held, qty=2)
+        self.assertEqual(self.approve(day)["sequence"], 2)
+        self.assertEqual(self.qty(name), 35)
+        count = self.call(
+            "wm_change",
+            sku,
+            "count",
+            28,
+            "직접 센 수량",
+            self.call("wm_item", sku)["revision"],
+            str(uuid.uuid4()),
+        )
+        self.call("wm2_import", self.doc(day, name, 1, key="after-count"))
+        self.assertEqual(self.approve(day)["count"], 1)
+        self.call(
+            "wm4_amend",
+            count["entry"],
+            None,
+            0,
+            24,
             "",
             None,
-            "out",
-            "추가 품목 확인",
-            original["id"],
-            v2["id"],
+            "과거 실사 메모 정정",
+            str(uuid.uuid4()),
         )
-        self.call("wm2_resolve", v2["id"], "reconciled", None, "실제 반출 확인")
-        self.review(next(r for r in self.read(day)["rows"] if r["entry_id"] is None))
-        self.approve(day)
-        self.assertEqual(self.qty("QA-19"), 38)
-        self.assertEqual(len(self.call("wm2_document", v1["id"])["settled"]), 2)
+        self.assertEqual(self.qty(name), 27)
+        self.call(
+            "wm4_amend",
+            count["entry"],
+            None,
+            1,
+            None,
+            "",
+            None,
+            "과거 표시 삭제",
+            str(uuid.uuid4()),
+        )
+        self.assertEqual(self.qty(name), 27)
 
 
 if __name__ == "__main__":

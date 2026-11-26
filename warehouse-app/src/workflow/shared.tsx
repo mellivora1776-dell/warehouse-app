@@ -186,7 +186,7 @@ export function SkuSearch({
 }) {
   const [s, setS] = useState(initial)
   const q = useDebounce(s)
-  const result = useData<SKU[]>('wm2_catalog', { p_search: q })
+  const result = useData<SKU[]>('wm4_catalog', { p_query: q })
   return (
     <div className="sku-search">
       <SearchBox value={s} onChange={setS} placeholder="품목명·SKU·사양 검색" />
@@ -195,11 +195,9 @@ export function SkuSearch({
           {result.data.length ? (
             result.data.map((i) => (
               <button type="button" key={i.id} onClick={() => select(i)}>
-                <strong>{i.name}</strong>
+                <strong>{i.display_name}</strong>
                 <small>
-                  {[i.sku !== i.name ? i.sku : '', i.spec, i.racks.join(', ')]
-                    .filter(Boolean)
-                    .join(' · ')}
+                  {[i.racks.join(', ')].filter(Boolean).join(' · ')}
                 </small>
               </button>
             ))

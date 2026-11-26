@@ -38,6 +38,7 @@ export async function handleDocument(req, res, preview) {
           ? 403
           : [
                 'WM2_DOCUMENT_CONFLICT',
+                'WM4_REPLACED',
                 'WM3_PREFLIGHT_CHANGED',
                 'WM3_RECEIPT_MISMATCH',
               ].includes(error.message)

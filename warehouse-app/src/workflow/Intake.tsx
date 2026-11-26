@@ -150,10 +150,9 @@ export function Intake({
   day: string
   setDay: (d: string) => void
 }) {
-  const result = useData<(Issue & { document_type: string })[]>(
-    'wm2_documents',
-    { p_day: day },
-  )
+  const result = useData<
+    (Issue & { document_type: string; closed_lines: number })[]
+  >('wm2_documents', { p_day: day })
   const task = useTask(),
     [raw, setRaw] = useState(''),
     [file, setFile] = useState<File | null>(null),
@@ -360,7 +359,11 @@ export function Intake({
                 <b>{d.external_id}</b>
                 <small>
                   {d.customer} · {d.document_type} · v{d.version} ·{' '}
-                  {statuses[d.status]}
+                  {d.closed_lines
+                    ? '마감 승인 ' + d.closed_lines + '행 · 원승인 보존'
+                    : d.status === 'dismissed'
+                      ? '취소·제외'
+                      : statuses[d.status]}
                 </small>
               </span>
               <ChevronRight size={16} />

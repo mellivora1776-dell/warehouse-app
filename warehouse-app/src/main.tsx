@@ -16,23 +16,14 @@ import {
   ListChecks,
 } from 'lucide-react'
 import { db, rpc, message, type Item } from './db'
-import {
-  Brand,
-  SearchBox,
-  Status,
-  Refresh,
-  Empty,
-  PageEnd,
-  usePage,
-  useDebounce,
-} from './ui'
+import { Brand, SearchBox, Status, Refresh, Empty, useDebounce } from './ui'
 import { Detail } from './Detail'
 import { Staff } from './Staff'
 import { Daily, Picking } from './workflow/Day'
 import { Intake } from './workflow/Intake'
 import { Ledger } from './workflow/Ledger'
 import { today } from './workflow/model'
-import { Sheet } from './workflow/shared'
+import { Sheet, useData, Loading } from './workflow/shared'
 import './style.css'
 import './workflow/workflow.css'
 
@@ -114,6 +105,7 @@ function Login() {
     </div>
   )
 }
+const natural = new Intl.Collator('ko', { numeric: true })
 function Inventory({
   version,
   open,
@@ -125,18 +117,31 @@ function Inventory({
 }) {
   const [search, setSearch] = useState('')
   const q = useDebounce(search)
-  const p = usePage<Item>(
-    'wm_items',
-    { p_query: q },
-    'p_after',
-    (x) => x.ordinal,
-    version,
-  )
+  const [sort, setSort] = useState('excel')
+  const result = useData<Item[]>('wm4_catalog', { p_query: q }, version)
+  const rows = [...(result.data ?? [])].sort((a, b) => {
+    let order = 0
+    if (sort === 'name') order = natural.compare(a.display_name, b.display_name)
+    if (sort === 'few' || sort === 'many')
+      order =
+        a.qty == null
+          ? Number(b.qty != null)
+          : b.qty == null
+            ? -1
+            : (a.qty - b.qty) * (sort === 'few' ? 1 : -1)
+    if (sort === 'rack') {
+      const first = (r: Item) => [...r.racks].sort(natural.compare)[0]
+      const x = first(a),
+        y = first(b)
+      order = x && y ? natural.compare(x, y) : Number(!x) - Number(!y)
+    }
+    return order || a.ordinal - b.ordinal
+  })
   return (
     <>
       <div className="title-row">
         <h1>재고 조회</h1>
-        <Refresh onClick={p.reload} />
+        <Refresh onClick={result.reload} />
       </div>
       <SearchBox
         value={search}
@@ -146,15 +151,22 @@ function Inventory({
       <div className="list-meta">
         <span>
           {q ? '검색 결과' : '전체 품목'}{' '}
-          <b>
-            {p.loading && !p.rows.length
-              ? '…'
-              : p.total.toLocaleString('ko-KR')}
-          </b>
+          <b>{!result.data ? '…' : rows.length.toLocaleString('ko-KR')}</b>
         </span>
         <span>
           <ListOrdered size={15} />
-          엑셀 순서
+          <select
+            aria-label="재고 정렬"
+            className="catalog-sort"
+            value={sort}
+            onChange={(e) => setSort(e.target.value)}
+          >
+            <option value="excel">엑셀 순서</option>
+            <option value="name">품목명순</option>
+            <option value="few">현재고 적은순</option>
+            <option value="many">현재고 많은순</option>
+            <option value="rack">랙 위치순</option>
+          </select>
         </span>
       </div>
       <div className="stock-list">
@@ -162,18 +174,9 @@ function Inventory({
           <span>품목명</span>
           <span>현재고</span>
         </div>
-        {p.rows.map((r) => (
+        {rows.map((r) => (
           <button key={r.id} className="stock-row" onClick={() => open(r.id)}>
-            <span className="item-name">
-              {r.name}
-              {(r.spec || (r.sku && r.sku !== r.name)) && (
-                <small className="sku-caption">
-                  {[r.sku !== r.name ? r.sku : null, r.spec]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </small>
-              )}
-            </span>
+            <span className="item-name">{r.display_name}</span>
             <span className={'qty ' + (r.qty === null ? 'unknown' : '')}>
               {r.qty === null ? (
                 '미확인'
@@ -188,7 +191,7 @@ function Inventory({
           </button>
         ))}
       </div>
-      {!p.loading && !p.error && !p.rows.length && (
+      {result.data && !rows.length && (
         <Empty
           title={
             q
@@ -200,7 +203,7 @@ function Inventory({
           text={q ? '다른 품번이나 랙 위치를 입력해 보세요.' : undefined}
         />
       )}
-      <PageEnd page={p} />
+      {!result.data && <Loading error={result.error} retry={result.reload} />}
     </>
   )
 }

@@ -1,43 +1,24 @@
 import { useState } from 'react'
 import { rpc } from '../db'
-import {
-  categoryLabels,
-  methods,
-  today,
-  type Movement,
-  type Category,
-} from './model'
+import { categoryLabels, methods, today, type Category } from './model'
 import { DayField, ErrorText, requestId, doneRequest, useTask } from './shared'
 
 type Props = {
   item: { id: string; name: string }
   initialDay?: string
-  flow: 'in' | 'out' | 'correction'
-  original?: Movement
-  related?: string
+  flow: 'in' | 'out'
   onSaved: () => void
 }
-export function ManualForm({
-  item,
-  initialDay,
-  flow,
-  original,
-  related,
-  onSaved,
-}: Props) {
-  const [cat, setCat] = useState<Category | ''>(original?.category ?? ''),
-    [direction, setDir] = useState(
-      flow === 'in' ? 'in' : flow === 'out' ? 'out' : '',
-    ),
+export function ManualForm({ item, initialDay, flow, onSaved }: Props) {
+  const [cat, setCat] = useState<Category | ''>(''),
     [n, setN] = useState(''),
     [day, setDay] = useState(initialDay ?? today()),
-    [customer, setCustomer] = useState(original?.customer ?? ''),
-    [method, setMethod] = useState(original?.method ?? ''),
+    [customer, setCustomer] = useState(''),
+    [method, setMethod] = useState(''),
     [note, setNote] = useState(''),
     [notice, setNotice] = useState('')
   const task = useTask()
-  const correction = flow === 'correction',
-    sale = cat === 'sale'
+  const sale = cat === 'sale'
   const choices: Category[] =
     flow === 'in'
       ? ['production_in', 'return', 'as']
@@ -52,12 +33,10 @@ export function ManualForm({
         p_qty: Number(n),
         p_customer: customer,
         p_method: sale ? method || null : null,
-        p_direction: direction,
+        p_direction: flow,
         p_note: note,
-        p_corrects: original?.id ?? null,
-        p_related: related ?? null,
       }
-      const scope = 'manual:' + item.id + ':' + (original?.id ?? flow)
+      const scope = 'manual:' + item.id + ':' + flow
       await rpc('wm2_manual', {
         ...payload,
         p_request: requestId(scope, payload),
@@ -70,45 +49,25 @@ export function ManualForm({
   }
   return (
     <form onSubmit={save} className="work-form">
-      {correction ? (
-        <p className="callout">
-          원승인 #{original?.id} · {item.name} · {original?.signed_qty}개
-        </p>
-      ) : (
-        <label>
-          수불 유형
-          <select
-            required
-            value={cat}
-            onChange={(e) => setCat(e.target.value as Category)}
-          >
-            <option value="">선택</option>
-            {choices.map((c) => (
-              <option key={c} value={c}>
-                {categoryLabels[c]}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
+      <label>
+        수불 유형
+        <select
+          required
+          value={cat}
+          onChange={(e) => setCat(e.target.value as Category)}
+        >
+          <option value="">선택</option>
+          {choices.map((c) => (
+            <option key={c} value={c}>
+              {categoryLabels[c]}
+            </option>
+          ))}
+        </select>
+      </label>
       <div className="form-pair">
         <DayField day={day} setDay={setDay} />
-        {correction ? (
-          <label>
-            정정 방향
-            <select
-              required
-              value={direction}
-              onChange={(e) => setDir(e.target.value)}
-            >
-              <option value="">선택</option>
-              <option value="in">재고 증가</option>
-              <option value="out">재고 감소</option>
-            </select>
-          </label>
-        ) : null}
       </div>
-      {sale && !correction && (
+      {sale && (
         <div className="form-pair">
           <label>
             거래처
@@ -130,11 +89,7 @@ export function ManualForm({
         </div>
       )}
       <label>
-        {correction
-          ? '바로잡을 차이 수량'
-          : flow === 'in'
-            ? '입고할 수량'
-            : '출고할 수량'}
+        {flow === 'in' ? '입고할 수량' : '출고할 수량'}
         <input
           required
           type="number"
@@ -147,9 +102,8 @@ export function ManualForm({
         />
       </label>
       <label>
-        {correction ? '정정 사유' : '메모 · 선택'}
+        메모 · 선택
         <input
-          required={correction}
           maxLength={1000}
           value={note}
           onChange={(e) => setNote(e.target.value)}
@@ -163,11 +117,7 @@ export function ManualForm({
         </p>
       )}
       <button className="primary" disabled={task.busy}>
-        {task.busy
-          ? '등록 중…'
-          : correction
-            ? '정정 후보 등록'
-            : '일일 마감 후보 등록'}
+        {task.busy ? '등록 중…' : '일일 마감 후보 등록'}
       </button>
     </form>
   )

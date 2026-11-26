@@ -26,7 +26,7 @@ import {
   evidenceRequest,
   uploadFile,
 } from './shared'
-import { ManualForm } from './ManualForm'
+import { RecordEdit, movementTarget } from './RecordEdit'
 import { Review } from './Review'
 
 function FileLink({ id }: { id: string }) {
@@ -233,10 +233,7 @@ export function Evidence({
 }) {
   const result = useData<DocInfo>('wm2_document', { p_doc: id })
   const data = result.data
-  const [fix, setFix] = useState<{
-      anchor: Movement
-      item: { id: string; name: string }
-    } | null>(null),
+  const [fix, setFix] = useState<Movement | null>(null),
     [mapping, setMapping] = useState<Row | null>(null)
   const upload = useTask(),
     cancelTask = useTask()
@@ -309,7 +306,8 @@ export function Evidence({
             <section className="review-box">
               <h3>승인 실적과 최종 지시 비교</h3>
               <p className="help">
-                실제 반출·입고 수량을 확인한 뒤 차이만 정정 후보로 등록하세요.
+                기록 수량은 원승인과 비교해 수정할 수 있습니다. 현재고 조정은
+                품목 상세의 실사에서 처리하세요.
               </p>
               {Array.from(
                 new Set([
@@ -339,22 +337,6 @@ export function Evidence({
                         {target - actual}개
                       </small>
                     )}
-                    {admin &&
-                      item &&
-                      data.settled.length > 0 &&
-                      !posted.length && (
-                        <button
-                          className="quiet"
-                          onClick={() =>
-                            setFix({
-                              anchor: data.settled[0],
-                              item: { id: item, name: rows[0].raw_name },
-                            })
-                          }
-                        >
-                          추가 품목 정정
-                        </button>
-                      )}
                   </div>
                 )
               })}
@@ -372,16 +354,8 @@ export function Evidence({
                     #{m.id} {m.name} · {m.signed_qty}개
                   </span>
                   {admin && (
-                    <button
-                      className="quiet"
-                      onClick={() =>
-                        setFix({
-                          anchor: m,
-                          item: { id: m.item_id, name: m.name },
-                        })
-                      }
-                    >
-                      별도 정정
+                    <button className="quiet" onClick={() => setFix(m)}>
+                      기록 수정
                     </button>
                   )}
                 </div>
@@ -451,10 +425,13 @@ export function Evidence({
                     {completed(l) ? '승인 완료' : decisions[l.decision]}
                   </div>
                   <small>
-                    {l.standard_name || l.name} {l.standard_spec} ·{' '}
+                    {l.display_name || l.standard_name || l.name} ·{' '}
                     {rowLabel(l)} · 준비 {qty(pickCount(l))} / 재고{' '}
                     {qty(stockCount(l))}
                   </small>
+                  {l.requester && admin && (
+                    <small>지시자·보고자 · {l.requester}</small>
+                  )}
                   {l.match_basis && <small>확정 근거 · {l.match_basis}</small>}
                   {(l.packing || l.remarks) && (
                     <small>
@@ -530,20 +507,14 @@ export function Evidence({
             />
           )}
           {fix && (
-            <Sheet title="별도 정정 거래" close={() => setFix(null)}>
-              <ManualForm
-                item={fix.item}
-                flow="correction"
-                original={fix.anchor}
-                related={v.status === 'reconcile' ? id : undefined}
-                initialDay={v.work_day}
-                onSaved={() => {
-                  setFix(null)
-                  saved?.()
-                  result.reload()
-                }}
-              />
-            </Sheet>
+            <RecordEdit
+              target={movementTarget(fix)}
+              close={() => setFix(null)}
+              saved={() => {
+                result.reload()
+                saved?.()
+              }}
+            />
           )}
         </>
       )}

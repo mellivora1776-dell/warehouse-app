@@ -126,6 +126,25 @@ export function message(err: unknown): string {
       return '중복된 식별자가 있습니다. 문서와 행 ID를 확인해 주세요.'
     if (['22003', '22P02', '22007', '22008', '23514'].includes(err.code))
       return '날짜, 정수 수량 또는 입력 형식을 확인해 주세요.'
+    if (
+      ['WM3_BLOCKED', 'WM6_STORE_LINE', 'WM3_RECEIPT_MISMATCH'].includes(
+        err.serverMessage,
+      )
+    ) {
+      try {
+        const reasons = JSON.parse(err.detail || '[]')
+        if (
+          Array.isArray(reasons) &&
+          reasons.every((x) => typeof x === 'string') &&
+          reasons.length
+        )
+          return reasons.join(' / ')
+      } catch {}
+    }
+    if (err.serverMessage === 'WM6_FUTURE')
+      return '예정 작업일이 되면 마감할 수 있습니다.'
+    if (err.serverMessage === 'WM6_OPEN_FORMAT')
+      return '보유량 확인 자료의 문서·행·수량·근거를 확인하세요.'
     if (msg[err.serverMessage]) return msg[err.serverMessage]
   }
   return '데이터를 확인할 수 없습니다. 연결 상태를 확인하고 다시 시도해 주세요.'

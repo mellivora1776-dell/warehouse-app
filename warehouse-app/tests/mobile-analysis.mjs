@@ -93,6 +93,8 @@ export async function verifyAnalysisMobile({
           standard_spec: '440V·60Hz',
           variant: 'order',
           product_kind: 'finished',
+          order_confirmed: true,
+          ...(!sale ? { opening_before: 0 } : {}),
           match_basis: '시험 문서에서 주문 완성품 확인',
           ...(sale ? { customer: '태성FAN', method: '퀵(용차 배송)' } : {}),
         },
@@ -104,34 +106,27 @@ export async function verifyAnalysisMobile({
     const row = (await rpc('wm2_day', { p_day: day })).rows.find(
       (r) => r.external_id === doc.document_id,
     )
-    if (!row.item_id) {
-      assert.equal(row.resolution, 'order_candidate')
-      await rpc('wm2_new_sku', {
-        p_line: row.id,
-        p_rev: row.rev,
-        p_sku: 'QA-440-60-FINISHED',
-        p_name: 'KJ3AB-750 완성품',
-        p_spec: '440V·60Hz',
-        p_racks: [],
-        p_ordered: true,
-        p_first_receipt: true,
-      })
-    }
+    assert.ok(row.item_id)
   }
   await page.setViewportSize({ width: 390, height: 844 })
   await navigate(page, true, 'picking', '피킹리스트')
   await page.getByLabel('출고 날짜').fill(day)
-  const group = page
+  const pickDay = page.locator('.pick-date[data-day="' + day + '"]')
+  const group = pickDay
     .locator('.pick-item')
     .filter({ has: page.getByText('KJ3AB-750 모터', { exact: true }) })
   await group.getByText('총 16개', { exact: true }).waitFor()
   await group.getByText('9개', { exact: true }).waitFor()
   await group.getByText('7개', { exact: true }).waitFor()
   assert.equal(await group.getByRole('checkbox').count(), 2)
-  const outside = page
+  const outside = pickDay
     .locator('.pick-item')
     .filter({ hasText: 'KTB-032T 모터' })
-  await outside.getByText('피킹 전용 · 재고 차감 없음').waitFor()
+  assert.equal(await outside.locator('.rack-line').count(), 0)
+  assert.equal(
+    await outside.getByText(/외부 준비|근거·버전|랙 미등록/).count(),
+    0,
+  )
   assert.ok(await outside.getByRole('checkbox').isEnabled())
   await fits(page)
   await mkdir(output, { recursive: true })
@@ -185,7 +180,7 @@ export async function verifyAnalysisMobile({
 export async function verifyConfirmedOrder({ page, rpc, navigate, fits }) {
   let day
   for (let i = 1; i <= 730; i++) {
-    const d = new Date(Date.UTC(2057, 0, i)).toISOString().slice(0, 10)
+    const d = new Date(Date.UTC(2017, 0, i)).toISOString().slice(0, 10)
     const state = await rpc('wm2_day', { p_day: d })
     if (!state.rows.length && !state.issues.length) {
       day = d
@@ -221,40 +216,142 @@ export async function verifyConfirmedOrder({ page, rpc, navigate, fits }) {
   }
   await navigate(page, true, 'intake', '분석 자료 등록')
   await page.getByLabel('분석 결과 JSON').fill(JSON.stringify(doc))
-  await page.getByRole('button', { name: '등록 전 사전 검증' }).click()
-  await page.getByText(/확정 주문품 · 신규 SKU 생성 예정/).waitFor()
+  await page.getByRole('button', { name: '확정 자료 등록' }).click()
+  await page.getByText(/출고 직전 보유량을 채팅에서/).waitFor()
   assert.deepEqual(await rpc('wm4_catalog', { p_query: model }), [])
-  await page.getByRole('button', { name: '검토 자료 등록' }).click()
-  await page.getByText(/검토 자료를 등록했습니다/).waitFor()
+  doc.lines[0].opening_before = 12
+  await page.getByLabel('분석 결과 JSON').fill(JSON.stringify(doc))
+  await page.getByRole('button', { name: '확정 자료 등록' }).click()
+  await page.getByText(/확정 자료를 등록했습니다/).waitFor()
   const [r] = (await rpc('wm2_day', { p_day: day })).rows
   assert.ok(r.item_id)
-  assert.equal(r.check_reason, '출고 전 재고 수량 확인')
-  await navigate(page, true, 'picking', '피킹리스트')
-  await page.getByLabel('출고 날짜').fill(day)
-  await page.getByText('출고 전 재고 수량 확인', { exact: true }).waitFor()
-  assert.ok(await page.getByRole('checkbox').isEnabled())
+  assert.equal(r.check_reason, '')
   await navigate(page, true, 'daily', '일일 마감')
   await page.getByLabel('대상 날짜').fill(day)
-  const question = page.getByRole('button', {
-    name: /QA-주문-.*출고 전 재고 수량 확인/,
-  })
-  await question.click()
-  const sheet = page.getByRole('dialog', { name: '출고 전 재고 수량 확인' })
+  await page
+    .getByText(model + '(220/380/50) [주문품]', { exact: true })
+    .waitFor()
   assert.equal(
-    await sheet.getByRole('button', { name: /SKU|품목 찾기/ }).count(),
+    await page.getByRole('button', { name: /첫 거래 전 재고/ }).count(),
     0,
   )
-  await sheet.getByLabel(/첫 창고 거래 직전 보유량/).fill('12')
-  await fits(page)
-  await sheet.getByRole('button', { name: '마감에 사용할 수량 저장' }).click()
-  await sheet.waitFor({ state: 'hidden' })
-  await page.getByRole('button', { name: /첫 거래 전 재고 12개/ }).waitFor()
   assert.equal((await rpc('wm_item', { p_item: r.item_id })).qty, null)
+  await fits(page)
   await page.getByRole('button', { name: /일일 마감 승인/ }).click()
   await page.getByText(/1차 마감을 저장했습니다/).waitFor()
   assert.equal((await rpc('wm_item', { p_item: r.item_id })).qty, 3)
   assert.ok((await rpc('wm3_preview', { p_doc: doc })).already_closed)
   console.log(
-    'PASS · confirmed order intake, dual-voltage label, one opening question, stock stays unknown until close 12→3.',
+    'PASS · confirmed order intake, dual-voltage label, chat-confirmed opening, one-click intake, stock stays unknown until close 12→3.',
+  )
+}
+export async function verifyShippingCalendar({
+  page,
+  rpc,
+  navigate,
+  fits,
+  output,
+}) {
+  const now = new Date(),
+    fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' })
+  const day = fmt.format(now),
+    next = fmt.format(new Date(now.getTime() + 86400000))
+  const id = randomUUID(),
+    customer = '삼성전기 ' + id.slice(0, 6)
+  const doc = {
+    schema_version: 2,
+    document_id: 'calendar/' + id,
+    case_id: 'calendar/' + id,
+    version: 1,
+    work_date: next,
+    document_type: '방문 출고지시서',
+    category: 'sale',
+    customer,
+    method: '방문',
+    lines: [
+      {
+        line_id: 'fan',
+        raw_name: 'KJB3-2600',
+        qty: 1,
+        remarks: '오전 9시 방문 · 포장',
+      },
+      {
+        line_id: 'wing',
+        raw_name: 'KTB-012T 날개',
+        standard_name: 'KTB-012T 날개',
+        qty: 1,
+        pick_required: true,
+        pick_qty: 1,
+        stock_managed: false,
+        stock_qty: 0,
+        remarks: '오전 9시 방문',
+        match_basis: '격리 시험 피킹 전용',
+      },
+    ],
+  }
+  const send = async () => {
+    const p = await rpc('wm3_preview', { p_doc: doc })
+    assert.ok(p.can_submit, JSON.stringify(p.blockers))
+    return rpc('wm2_import', { p_doc: { ...doc, preview_stamp: p.stamp } })
+  }
+  await send()
+  assert.ok((await send()).duplicate)
+  const previous = (await rpc('wm2_day', { p_day: next })).rows.filter(
+    (r) => r.external_id === doc.document_id,
+  )
+  const stock = async () =>
+    (
+      await rpc('wm_item', {
+        p_item: previous[0].item_id || previous[1].item_id,
+      })
+    ).qty
+  const start = await stock()
+  await navigate(page, true, 'picking', '피킹리스트')
+  await page.getByRole('heading', { name: '다음 출고 예정' }).waitFor()
+  const future = page.locator('.pick-date[data-day="' + next + '"]')
+  const section = future
+    .locator('.pick-section')
+    .filter({
+      has: page.getByRole('heading', {
+        name: customer + ' · 오전 9시 방문',
+        exact: true,
+      }),
+    })
+  const wing = section
+    .locator('.pick-item')
+    .filter({
+      has: page.getByRole('heading', { name: 'KTB-012T 날개', exact: true }),
+    })
+  await wing.getByRole('checkbox').check()
+  await wing.locator('input:checked').waitFor()
+  assert.equal(await wing.locator('.rack-line').count(), 0)
+  assert.equal(await section.getByRole('checkbox').count(), 2)
+  assert.equal(
+    await page
+      .locator('.pick-date[data-day="' + day + '"]')
+      .getByText(customer, { exact: true })
+      .count(),
+    0,
+  )
+  await fits(page)
+  if (output) await page.screenshot({ path: join(output, 'next-shipping.png') })
+  await page.clock.install({ time: now })
+  await page.clock.setSystemTime(new Date(now.getTime() + 86400000))
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await future.getByRole('heading', { name: /오늘 출고/ }).waitFor()
+  await future
+    .getByLabel('KTB-012T 날개 피킹 완료 · ' + customer, { exact: false })
+    .waitFor()
+  const after = (await rpc('wm2_day', { p_day: next })).rows.filter(
+    (r) => r.external_id === doc.document_id,
+  )
+  assert.deepEqual(
+    after.map((r) => r.id).sort(),
+    previous.map((r) => r.id).sort(),
+  )
+  assert.equal(after.find((r) => r.line_key === 'wing').picked, true)
+  assert.equal(start, await stock())
+  console.log(
+    'PASS · today and upcoming visits, midnight rollover, rackless wing, unchanged line IDs and stock',
   )
 }

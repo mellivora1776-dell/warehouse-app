@@ -23,7 +23,7 @@ import { Daily, Picking } from './workflow/Day'
 import { Intake } from './workflow/Intake'
 import { Ledger } from './workflow/Ledger'
 import { today } from './workflow/model'
-import { Sheet, useData, Loading } from './workflow/shared'
+import { useData, Loading } from './workflow/shared'
 import './style.css'
 import './workflow/workflow.css'
 
@@ -236,7 +236,32 @@ function Home({ user }: { user: User }) {
     }
   }, [user.id, check])
   const [day, setDay] = useState(today),
-    [openDays, setOpenDays] = useState<string[]>([])
+    [koreaDay, setKoreaDay] = useState(today)
+  const [openDays, setOpenDays] = useState<string[]>([]),
+    [menuRevision, setMenuRevision] = useState(0)
+  const refreshDays = () => setMenuRevision((n) => n + 1)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>
+    function syncDate() {
+      clearTimeout(timer)
+      const now = Date.now()
+      setKoreaDay(today())
+      timer = setTimeout(
+        syncDate,
+        86400000 - ((now + 9 * 3600000) % 86400000) + 50,
+      )
+    }
+    function onFocus() {
+      syncDate()
+      refreshDays()
+    }
+    syncDate()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [])
   useEffect(() => {
     let active = true
     if (role === 'admin')
@@ -250,11 +275,17 @@ function Home({ user }: { user: User }) {
     return () => {
       active = false
     }
-  }, [role])
+  }, [role, koreaDay, menuRevision, section, ver])
   const menu = [
     ['stock', '재고 조회', Boxes],
     ['picking', '피킹리스트', ListChecks],
-    ['daily', '일일 마감', ClipboardCheck],
+    [
+      'daily',
+      role === 'admin' && openDays.length
+        ? '일일 마감 · 미마감 ' + openDays.length + '일'
+        : '일일 마감',
+      ClipboardCheck,
+    ],
     ['history', '입출고 기록', HistoryIcon],
     ['sales', '영업출고 조회', Truck],
     ...(role === 'admin'
@@ -265,6 +296,8 @@ function Home({ user }: { user: User }) {
       : []),
   ]
   const go = (id: string) => {
+    if (id === 'daily' && openDays.length && !openDays.includes(day))
+      setDay(openDays.includes(koreaDay) ? koreaDay : openDays[0])
     setSection(id)
     window.scrollTo(0, 0)
   }
@@ -298,8 +331,7 @@ function Home({ user }: { user: User }) {
                   className={section === id ? 'current' : ''}
                   aria-current={section === id ? 'page' : undefined}
                   onClick={() => {
-                    setSection(String(id))
-                    window.scrollTo(0, 0)
+                    go(String(id))
                   }}
                 >
                   <I size={19} />
@@ -364,11 +396,18 @@ function Home({ user }: { user: User }) {
         ) : section === 'staff' && role === 'admin' ? (
           <Staff />
         ) : section === 'daily' ? (
-          <Daily day={day} setDay={setDay} admin={role === 'admin'} />
+          <Daily
+            koreaDay={koreaDay}
+            openDays={openDays}
+            changed={refreshDays}
+            day={day}
+            setDay={setDay}
+            admin={role === 'admin'}
+          />
         ) : section === 'picking' ? (
-          <Picking day={day} setDay={setDay} admin={role === 'admin'} />
+          <Picking koreaDay={koreaDay} admin={role === 'admin'} />
         ) : section === 'intake' && role === 'admin' ? (
-          <Intake day={day} setDay={setDay} />
+          <Intake changed={refreshDays} day={day} setDay={setDay} />
         ) : (
           <Ledger
             key={section}
@@ -378,32 +417,6 @@ function Home({ user }: { user: User }) {
           />
         )}
       </main>
-      {openDays.length > 0 && role === 'admin' && (
-        <Sheet title="미마감 내역" close={() => setOpenDays([])}>
-          <h2>검토할 날짜</h2>
-          <p className="help">
-            날짜를 선택하면 검토표가 열립니다. 재고 반영은 검토표에서 마감 확정
-            시 진행됩니다.
-          </p>
-          {openDays.map((d) => (
-            <button
-              key={d}
-              className="issue-row"
-              onClick={() => {
-                setDay(d)
-                go('daily')
-                setOpenDays([])
-              }}
-            >
-              {d}
-              <ChevronRight size={16} />
-            </button>
-          ))}
-          <button className="quiet close-later" onClick={() => setOpenDays([])}>
-            나중에 확인
-          </button>
-        </Sheet>
-      )}
       {selected && (
         <Detail
           key={selected}

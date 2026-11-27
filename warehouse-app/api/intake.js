@@ -44,7 +44,24 @@ export async function handleDocument(req, res, preview) {
               ].includes(error.message)
             ? 409
             : 422
+      let blockers
+      if (
+        ['WM3_BLOCKED', 'WM6_STORE_LINE', 'WM3_RECEIPT_MISMATCH'].includes(
+          error.message,
+        )
+      ) {
+        try {
+          const details = JSON.parse(error.details)
+          if (
+            Array.isArray(details) &&
+            details.every((x) => typeof x === 'string')
+          )
+            blockers = details
+        } catch {}
+      }
       return res.status(status).json({
+        ...(blockers ? { blockers } : {}),
+        document: req.body.document_id,
         error: /^WM[\w]+$/.test(error.message)
           ? error.message
           : '입력 자료의 날짜·수량·행 식별자를 확인해 주세요.',
@@ -53,6 +70,7 @@ export async function handleDocument(req, res, preview) {
     if (preview) return res.status(200).json(data)
     return res.status(data.duplicate ? 200 : 201).json({
       document: data.id,
+      record_type: data.record_type,
       state: data.status,
       duplicate: data.duplicate,
       stock_posted: false,

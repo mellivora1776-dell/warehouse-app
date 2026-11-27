@@ -35,7 +35,14 @@ import { Evidence } from './Evidence'
 import { RecordEdit, dayTarget, Disposition } from './RecordEdit'
 import { Review } from './Review'
 
-type Props = { day: string; setDay: (d: string) => void; admin: boolean }
+type Props = {
+  day: string
+  setDay: (d: string) => void
+  admin: boolean
+  koreaDay: string
+  openDays: string[]
+  changed: () => void
+}
 export function BatchDetails({ id, close }: { id: string; close: () => void }) {
   const result = useData<{
     work_day: string
@@ -102,12 +109,18 @@ export function BatchDetails({ id, close }: { id: string; close: () => void }) {
     </Sheet>
   )
 }
-export function Daily({ day, setDay, admin }: Props) {
+export function Daily({
+  day,
+  setDay,
+  admin,
+  koreaDay,
+  openDays,
+  changed,
+}: Props) {
   const result = useData<DayData>('wm2_day', { p_day: day })
   const d = result.data
   const [cat, setCat] = useState(''),
     [edit, setEdit] = useState<Row | null>(null),
-    [opening, setOpening] = useState<Row[] | null>(null),
     [record, setRecord] = useState<Row | null>(null),
     [hold, setHold] = useState<Row | null>(null),
     [source, setSource] = useState<{ id: string; issue?: Issue } | null>(null),
@@ -120,13 +133,14 @@ export function Daily({ day, setDay, admin }: Props) {
     (r) =>
       !completed(r) &&
       !['hold', 'exclude'].includes(r.decision) &&
-      !r.related_hold,
+      !r.related_hold &&
+      !r.awaiting_opening,
   )
   const held = rows.filter(
     (r) =>
       !completed(r) &&
       r.decision !== 'exclude' &&
-      (r.decision === 'hold' || r.related_hold),
+      (r.decision === 'hold' || r.related_hold || r.awaiting_opening),
   )
   const problems = new Map<string, string>()
   waiting.forEach((r) => {
@@ -147,10 +161,6 @@ export function Daily({ day, setDay, admin }: Props) {
             ' 부족합니다.',
         )
   }
-  const openingProblems = waiting.filter(
-    (r) => r.opening_question && problems.get(r.id) === r.opening_question,
-  )
-  const openingIds = new Set(openingProblems.map((r) => r.id))
   const unresolved = issues.filter((i) => !i.deferred)
   const groups = grouped(
     rows.filter(
@@ -162,15 +172,20 @@ export function Daily({ day, setDay, admin }: Props) {
     ),
   )
   const count = waiting.filter((r) => !problems.has(r.id)).length
+  const future = day > koreaDay
   const blocked = !!unresolved.length || !!problems.size
   const scope = 'close:' + day
+  function reload() {
+    result.reload()
+    changed()
+  }
   function openRow(r: Row) {
     if (!admin) setSource({ id: r.document_id })
     else if (completed(r)) setRecord(r)
     else setEdit(r)
   }
   async function approve() {
-    if (!d || blocked || !count) return
+    if (!d || future || blocked || !count) return
     await task.run(async () => {
       const b = await rpc<{ sequence: number }>('wm2_close', {
         p_day: day,
@@ -179,7 +194,7 @@ export function Daily({ day, setDay, admin }: Props) {
       })
       doneRequest(scope)
       setSuccess(day + ' ' + b.sequence + '차 마감을 저장했습니다.')
-      result.reload()
+      reload()
     })
   }
   function amount(r: Row) {
@@ -217,8 +232,25 @@ export function Daily({ day, setDay, admin }: Props) {
     <>
       <div className="title-row">
         <h1>일일 마감</h1>
-        <Refresh onClick={result.reload} />
+        <Refresh onClick={reload} />
       </div>
+      {admin && openDays.length > 0 && (
+        <nav className="open-dates" aria-label="미마감 날짜">
+          <span>미마감 날짜</span>
+          {openDays.map((d) => (
+            <button
+              key={d}
+              aria-pressed={day === d}
+              onClick={() => {
+                setDay(d)
+                setSuccess('')
+              }}
+            >
+              {d}
+            </button>
+          ))}
+        </nav>
+      )}
       <div className="work-toolbar">
         <DayField
           day={day}
@@ -247,6 +279,11 @@ export function Daily({ day, setDay, admin }: Props) {
           </select>
         </label>
       </div>
+      {future && (
+        <p className="help">
+          예정된 출고는 해당 작업일부터 마감할 수 있습니다.
+        </p>
+      )}
       <ErrorText text={task.error} />
       {success && (
         <p className="callout" role="status">
@@ -261,7 +298,7 @@ export function Daily({ day, setDay, admin }: Props) {
             <section className="attention-list">
               <h3>
                 <AlertCircle size={16} />
-                확인 필요
+                마감 전 해결할 거래
               </h3>
               {unresolved.map((i) => (
                 <button
@@ -279,27 +316,8 @@ export function Daily({ day, setDay, admin }: Props) {
                   <ChevronRight size={16} />
                 </button>
               ))}
-              {grouped(openingProblems).map((g) => (
-                <div key={g[0].id} className="problem-row">
-                  <button className="issue-row" onClick={() => setOpening(g)}>
-                    <span>
-                      <b>{standardName(g[0])}</b>
-                      <small>{g[0].opening_question}</small>
-                    </span>
-                    <ChevronRight size={16} />
-                  </button>
-                  {admin && g.length === 1 && (
-                    <button
-                      className="record-action"
-                      onClick={() => setHold(g[0])}
-                    >
-                      보류
-                    </button>
-                  )}
-                </div>
-              ))}
               {waiting
-                .filter((r) => problems.has(r.id) && !openingIds.has(r.id))
+                .filter((r) => problems.has(r.id))
                 .map((r) => (
                   <div className="problem-row" key={r.id}>
                     <button className="issue-row" onClick={() => openRow(r)}>
@@ -326,15 +344,19 @@ export function Daily({ day, setDay, admin }: Props) {
               <summary>
                 보류 {held.length + issues.filter((i) => i.deferred).length}건
               </summary>
-              {held.map((r) => (
-                <button
-                  className="issue-row"
-                  key={r.id}
-                  onClick={() => openRow(r)}
-                >
-                  {standardName(r)} · {r.reason || '관련 문서 보류'}
-                </button>
-              ))}
+              {held.map((r) =>
+                r.awaiting_opening ? (
+                  <OpeningBalance key={r.id} row={r} />
+                ) : (
+                  <button
+                    className="issue-row"
+                    key={r.id}
+                    onClick={() => openRow(r)}
+                  >
+                    {standardName(r)} · {r.reason || '관련 문서 보류'}
+                  </button>
+                ),
+              )}
               {issues
                 .filter((i) => i.deferred)
                 .map((i) => (
@@ -352,22 +374,6 @@ export function Daily({ day, setDay, admin }: Props) {
             {groups.map((g) => (
               <article className="day-item" key={g[0].id}>
                 <h3>{standardName(g[0])}</h3>
-                {g.some((r) => r.opening_balance != null && !completed(r)) && (
-                  <button
-                    className="textbtn"
-                    onClick={() =>
-                      setOpening(
-                        waiting.filter((r) => r.item_id === g[0].item_id),
-                      )
-                    }
-                  >
-                    첫 거래 전 재고{' '}
-                    {qty(
-                      g.find((r) => r.opening_balance != null)?.opening_balance,
-                    )}{' '}
-                    · 확인
-                  </button>
-                )}
                 {g.map((r) => (
                   <div className="day-trade" key={r.id}>
                     <span>
@@ -414,7 +420,7 @@ export function Daily({ day, setDay, admin }: Props) {
               )}
               <button
                 className="primary"
-                disabled={task.busy || blocked || !count}
+                disabled={task.busy || future || blocked || !count}
                 onClick={() => void approve()}
               >
                 {day} 일일 마감 승인 · {count}건
@@ -437,25 +443,12 @@ export function Daily({ day, setDay, admin }: Props) {
           )}
         </>
       )}
-      {opening && d && (
-        <OpeningBalance
-          rows={opening}
-          stamp={d.stamp}
-          admin={admin}
-          close={() => setOpening(null)}
-          saved={result.reload}
-          hold={(r) => {
-            setOpening(null)
-            setHold(r)
-          }}
-        />
-      )}
       {edit && (
         <Review
           row={edit}
           all={rows}
           close={() => setEdit(null)}
-          saved={result.reload}
+          saved={reload}
         />
       )}
       {hold && (
@@ -463,14 +456,14 @@ export function Daily({ day, setDay, admin }: Props) {
           row={hold}
           hold
           close={() => setHold(null)}
-          saved={result.reload}
+          saved={reload}
         />
       )}
       {record && (
         <RecordEdit
           target={dayTarget(record)}
           close={() => setRecord(null)}
-          saved={result.reload}
+          saved={reload}
         />
       )}
       {source && (
@@ -478,7 +471,7 @@ export function Daily({ day, setDay, admin }: Props) {
           id={source.id}
           issue={source.issue}
           admin={admin}
-          saved={result.reload}
+          saved={reload}
           close={() => setSource(null)}
         />
       )}

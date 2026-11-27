@@ -769,3 +769,99 @@
 .opening-hold {
   margin-inline-start: 12px;
 }
+
+.open-dates {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0 0 14px;
+}
+.open-dates span {
+  color: var(--muted);
+  font-size: 0.86rem;
+  margin-right: 3px;
+}
+.open-dates button {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: white;
+  font: inherit;
+  font-size: 0.86rem;
+}
+.open-dates button[aria-pressed='true'] {
+  background: #26362f;
+  border-color: #26362f;
+  color: white;
+}
+.pick-date {
+  margin: 20px 0;
+}
+.shipping-day {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  font-size: 1.13rem;
+}
+.shipping-day small {
+  font-weight: 500;
+  font-size: 0.83rem;
+  color: var(--muted);
+}
+.next-shipping {
+  border-top: 2px solid var(--line);
+  padding-top: 18px;
+  margin: 22px 0 12px;
+  font-size: 1.2rem;
+}
+.pick-client {
+  font-size: 0.94rem;
+  margin: 12px 0 3px;
+}
+.pick-date .pick-section {
+  margin-top: 5px;
+}
+.pick-date .pick-check span {
+  min-width: 0;
+}
+.pick-empty {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 10px 0 18px;
+}
+.single-pick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 44px;
+  gap: 6px;
+  align-items: center;
+}
+.single-pick h3 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+.single-pick small {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.single-pick strong {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.single-check {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.single-check input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: #315648;
+}

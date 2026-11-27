@@ -11,6 +11,7 @@ import { chromium } from 'playwright-core'
 import {
   verifyAnalysisMobile,
   verifyConfirmedOrder,
+  verifyShippingCalendar,
 } from './mobile-analysis.mjs'
 import pin from '../api/pin.js'
 import intake from '../api/intake.js'
@@ -167,7 +168,7 @@ try {
   })
   let day
   for (let n = 1; n < 730; n++) {
-    const d = new Date(Date.UTC(2041, 0, n)).toISOString().slice(0, 10),
+    const d = new Date(Date.UTC(2011, 0, n)).toISOString().slice(0, 10),
       w = await rpc('wm2_day', { p_day: d })
     if (!w.rows.length && !w.issues.length) {
       day = d
@@ -238,9 +239,12 @@ try {
     await p.getByRole('heading', { name: '재고 조회' }).waitFor()
   }
   await Promise.all([login(a, 'admin'), login(s, 'staff')])
-  const popup = a.getByRole('dialog', { name: '미마감 내역' })
-  await popup.getByRole('button', { name: day }).waitFor()
-  await popup.getByRole('button', { name: '나중에 확인' }).click()
+  await a
+    .getByLabel('업무 메뉴')
+    .locator('option[value="daily"]')
+    .filter({ hasText: '미마감' })
+    .waitFor({ state: 'attached' })
+  assert.equal(await a.getByRole('dialog', { name: '미마감 내역' }).count(), 0)
   const navigate = async (pg, mobile, id, title) => {
     if (mobile) await pg.getByLabel('업무 메뉴').selectOption(id)
     else
@@ -266,8 +270,12 @@ try {
   }
   await navigate(a, true, 'picking', '피킹리스트')
   await a.getByLabel('출고 날짜').fill(day)
-  await a.getByLabel(detail.display_name + ' 피킹 완료').click()
-  assert.ok(await a.getByRole('checkbox').isChecked())
+  const pickDay = a.locator('.pick-date[data-day="' + day + '"]')
+  await Promise.all([
+    a.waitForResponse((r) => r.url().includes('/rpc/wm2_pick') && r.ok()),
+    pickDay.getByLabel(detail.display_name + ' 피킹 완료').check(),
+  ])
+  await pickDay.locator('input:checked').waitFor()
   await fits(a)
   const newer = {
     ...doc,
@@ -278,12 +286,12 @@ try {
   }
   await navigate(a, true, 'intake', '분석 자료 등록')
   await a.getByLabel('분석 결과 JSON').fill(JSON.stringify(newer))
-  await a.getByRole('button', { name: '등록 전 사전 검증' }).click()
-  await a.getByRole('button', { name: '검토 자료 등록' }).click()
-  await a.getByText(/검토 자료를 등록했습니다/).waitFor()
+  await a.getByRole('button', { name: '확정 자료 등록' }).click()
+  await a.getByText(/확정 자료를 등록했습니다/).waitFor()
   await navigate(a, true, 'picking', '피킹리스트')
-  await a.getByText(/기존 피킹 변경/).waitFor()
-  assert.equal(await a.getByRole('checkbox').isChecked(), false)
+  await a.getByLabel('출고 날짜').fill(day)
+  await pickDay.getByText(/기존 피킹 변경/).waitFor()
+  assert.equal(await pickDay.getByRole('checkbox').isChecked(), false)
   const internal = {
     ...doc,
     document_id: 'internal-' + key,
@@ -294,10 +302,16 @@ try {
   }
   assert.equal((await send(internal)).status, 201)
   await navigate(a, true, 'daily', '일일 마감')
+  await a.getByLabel('대상 날짜').fill(day)
   const card = a.locator('.day-item').filter({ hasText: detail.display_name })
   await card.getByText('생산출고', { exact: true }).waitFor()
-  // The prior pick was changed by a revision; this is the only transaction requiring a decision.
-  await a.locator('.attention-list .issue-row').first().click()
+  // A confirmed revision resets the pick, and can still be edited without a second review.
+  assert.equal(await a.locator('.attention-list').count(), 0)
+  await card
+    .locator('.day-trade')
+    .filter({ hasText: '시험 거래처' })
+    .getByRole('button')
+    .click()
   let dialog = a.getByRole('dialog', { name: '거래 검토' })
   await dialog.getByLabel('검토 수량').fill('2')
   await dialog.getByText(/현재 10개 → 예상 6개/).waitFor()
@@ -340,6 +354,9 @@ try {
   await stock.waitFor()
   assert.match(await stock.textContent(), /7대/)
   await stock.click()
+  await s.getByText('기간·조회 조건').click()
+  await s.getByLabel('시작일').fill(day)
+  await s.getByLabel('종료일').fill(day)
   await s
     .getByRole('dialog')
     .locator('.movement-row')
@@ -411,6 +428,9 @@ try {
   await drop.getByLabel('삭제 사유').fill('시험 지시 제외')
   await drop.getByRole('button', { name: '삭제 확정' }).click()
   await pending.waitFor({ state: 'hidden' })
+  await itemSheet.getByText('기간·조회 조건').click()
+  await itemSheet.getByLabel('시작일').fill(day)
+  await itemSheet.getByLabel('종료일').fill(day)
   const settled = itemSheet
     .locator('.ledger-line')
     .filter({ hasText: day })
@@ -485,7 +505,7 @@ try {
     if (await detailClose.isVisible()) await detailClose.click()
     let analysisDay
     for (let i = 0; i < 365; i++) {
-      const candidate = new Date(Date.UTC(2044, 10, 20 + i))
+      const candidate = new Date(Date.UTC(2014, 10, 20 + i))
           .toISOString()
           .slice(0, 10),
         data = await rpc('wm2_day', { p_day: candidate })
@@ -505,6 +525,13 @@ try {
     })
   }
   await verifyConfirmedOrder({ page: a, rpc, navigate, fits })
+  await verifyShippingCalendar({
+    page: a,
+    rpc,
+    navigate,
+    fits,
+    output: process.env.WM_QA_ANALYSIS_PNG_DIR,
+  })
   assert.deepEqual(exceptions, [])
   console.log(
     'PASS · PIN roles, 320px/1280px, versioned intake, picking, grouped review edits, close 10→7, confirmed logs/sales, manual pending, immediate count 7→5, private file bytes, duplicate image and administrator-only access.',

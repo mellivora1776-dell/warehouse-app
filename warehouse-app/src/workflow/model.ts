@@ -108,6 +108,7 @@ export type Row = {
   opening_balance?: number | null
   opening_review?: number | null
   check_reason?: string
+  awaiting_opening?: boolean
   related_hold?: boolean
   record_rev?: number
   record_deleted?: boolean
@@ -304,6 +305,7 @@ export function planned(rows: Row[]) {
     if (
       completed(r) ||
       r.related_hold ||
+      r.awaiting_opening ||
       r.decision === 'hold' ||
       r.decision === 'exclude'
     )

@@ -42,6 +42,7 @@ type IntakeResult = {
   id: string
   duplicate: boolean
   status: string
+  record_type?: string
   already_closed?: boolean
   verified: boolean
   stored_lines: PlanLine[]
@@ -145,9 +146,11 @@ function Connection() {
   )
 }
 export function Intake({
+  changed,
   day,
   setDay,
 }: {
+  changed: () => void
   day: string
   setDay: (d: string) => void
 }) {
@@ -182,9 +185,14 @@ export function Intake({
         !doc ||
         typeof doc !== 'object' ||
         Array.isArray(doc) ||
-        !Array.isArray(doc.lines)
+        (!Array.isArray(doc.lines) &&
+          doc.record_type !== 'opening_confirmation')
       )
         throw new Error('문서 한 버전과 lines 배열이 필요합니다.')
+      if (file && doc.record_type === 'opening_confirmation')
+        throw new Error(
+          '보유량 확인에는 기존 거래의 식별자와 확인 근거를 사용하세요.',
+        )
       if (file) {
         const bytes = await file.arrayBuffer(),
           hash = Array.from(
@@ -202,28 +210,27 @@ export function Intake({
         }
       }
       if (start !== version.current) return
-      if (!preview) {
-        const checked = await rpc<Preview>('wm3_preview', { p_doc: doc })
-        if (start === version.current) setPreview(checked)
-        return
-      }
-      if (!preview.can_submit) return
-      setPreview(null)
+      const checked = await rpc<Preview>('wm3_preview', { p_doc: doc })
+      if (start !== version.current) return
+      setPreview(checked)
+      if (!checked.can_submit) return
       if (file) await uploadFile(file)
       if (start !== version.current) return
       const record = await rpc<IntakeResult>('wm2_import', {
-        p_doc: { ...doc, preview_stamp: preview.stamp },
+        p_doc: { ...doc, preview_stamp: checked.stamp },
       })
       setReceived(record)
       if (
         !record.verified ||
-        record.stored_lines?.length !== preview.lines.length
+        record.stored_lines?.length !== checked.lines.length
       )
         throw new Error(
           '기존 저장 결과가 사전 검증과 다릅니다. 등록한 버전에서 거래 검토 내역을 확인하세요.',
         )
       setDay(doc.work_date)
+      changed()
       result.reload()
+      setPreview(null)
       setRaw('')
       setFile(null)
       setFileInputKey((k) => k + 1)
@@ -323,24 +330,17 @@ export function Intake({
           </section>
         )}
         <ErrorText text={task.error} />
-        <button
-          className="primary"
-          disabled={
-            task.busy || !raw.trim() || !!(preview && !preview.can_submit)
-          }
-        >
-          {task.busy
-            ? '확인 중…'
-            : preview
-              ? '검토 자료 등록'
-              : '등록 전 사전 검증'}
+        <button className="primary" disabled={task.busy || !raw.trim()}>
+          {task.busy ? '등록 중…' : '확정 자료 등록'}
         </button>
       </form>
       {received?.verified && (
         <p role="status" className="callout">
           {received.duplicate
             ? '이미 등록된 문서입니다.'
-            : '검토 자료를 등록했습니다. 저장값을 대조했습니다.'}{' '}
+            : received.record_type === 'opening_confirmation'
+              ? '기존 거래에 보유량 확인을 연결했습니다.'
+              : '확정 자료를 등록했습니다. 저장값을 대조했습니다.'}{' '}
           {received.already_closed
             ? '기존 마감 확인됨'
             : received.status === 'dismissed'

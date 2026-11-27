@@ -8,7 +8,10 @@ import { randomUUID, createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { build } from 'vite'
 import { chromium } from 'playwright-core'
-import { verifyAnalysisMobile } from './mobile-analysis.mjs'
+import {
+  verifyAnalysisMobile,
+  verifyConfirmedOrder,
+} from './mobile-analysis.mjs'
 import pin from '../api/pin.js'
 import intake from '../api/intake.js'
 import preflight from '../api/preflight.js'
@@ -501,6 +504,7 @@ try {
       output: process.env.WM_QA_ANALYSIS_PNG_DIR,
     })
   }
+  await verifyConfirmedOrder({ page: a, rpc, navigate, fits })
   assert.deepEqual(exceptions, [])
   console.log(
     'PASS · PIN roles, 320px/1280px, versioned intake, picking, grouped review edits, close 10→7, confirmed logs/sales, manual pending, immediate count 7→5, private file bytes, duplicate image and administrator-only access.',

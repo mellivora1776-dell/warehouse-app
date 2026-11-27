@@ -163,7 +163,13 @@ export function Picking({
                       ) : !f.item_id ? (
                         <small className="issue-text">품목 연결 필요</small>
                       ) : f.qty == null ? (
-                        <small className="issue-text">현재고 미입력</small>
+                        <small className="issue-text">
+                          {f.opening_question
+                            ? f.opening_balance == null
+                              ? f.opening_question
+                              : '마감 승인 대기'
+                            : '현재고 미입력'}
+                        </small>
                       ) : shortage ? (
                         <small className="issue-text">
                           재고 부족 · 현재 {qty(f.qty)}

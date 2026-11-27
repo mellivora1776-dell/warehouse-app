@@ -765,3 +765,7 @@
     max-width: 128px;
   }
 }
+
+.opening-hold {
+  margin-inline-start: 12px;
+}

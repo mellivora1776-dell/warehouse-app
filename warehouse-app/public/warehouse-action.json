@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "재고 마스터 미승인 자료 등록",
-    "version": "2.1.0",
-    "description": "관리자 승인을 기다리는 분석 자료를 저장합니다. 현재고는 변경되지 않습니다."
+    "version": "2.2.0",
+    "description": "미승인 거래를 저장합니다. 사용자 확정 주문품은 기존 SKU에 연결하거나 한 번 생성합니다. 창고 증감은 일일 마감 승인 때 반영됩니다."
   },
   "servers": [
     {
@@ -455,6 +455,19 @@
                   "description": "재고 반영 수량의 절댓값",
                   "minimum": 0,
                   "maximum": 2147483647
+                },
+                "order_confirmed": {
+                  "type": "boolean",
+                  "description": "사용자가 채팅에서 이 주문품의 표준 모델, 제품 종류와 전체 구별 사양을 명시적으로 확정한 경우에만 true. variant=order, standard_name, standard_spec, product_kind, match_basis 필요."
+                },
+                "opening_before": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 2147483647,
+                  "description": "order_confirmed 행 전용. 사용자가 확인한 작업일 첫 창고 거래 직전 보유량. 미확인은 생략 또는 null. 입출고량에서 추정하지 않는다. 마감 전 검토 값."
                 }
               },
               "additionalProperties": false
@@ -680,6 +693,27 @@
             "items": {
               "type": "string"
             }
+          },
+          "order_action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "reuse"
+            ],
+            "description": "사전 검증 시 신규 생성 예정 / 기존 주문품 연결. item_id는 실제 접수에 사용할 ID이며 사전 검증은 읽기 전용."
+          },
+          "opening_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2147483647,
+            "description": "order_confirmed 행 전용. 사용자가 확인한 작업일 첫 창고 거래 직전 보유량. 미확인은 생략 또는 null. 입출고량에서 추정하지 않는다. 마감 전 검토 값."
+          },
+          "variant_key": {
+            "type": "string",
+            "description": "서버가 계산한 품목·사양 식별값"
           }
         }
       },

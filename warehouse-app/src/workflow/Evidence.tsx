@@ -471,6 +471,8 @@ export function Evidence({
                     reconciled: '대조 완료',
                     dismiss: '제외',
                     cancel: '미승인 문서 취소',
+                    order_link: '확정 주문품 SKU 연결',
+                    opening_review: '첫 거래 전 재고 확인',
                     alias: '별칭 확정',
                   }[a.action] ?? a.action}
                 </b>

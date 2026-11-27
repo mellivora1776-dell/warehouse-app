@@ -1,3 +1,4 @@
+import { OpeningBalance } from './OpeningBalance'
 import { useState } from 'react'
 import { ChevronRight, AlertCircle } from 'lucide-react'
 import { rpc } from '../db'
@@ -62,12 +63,13 @@ export function BatchDetails({ id, close }: { id: string; close: () => void }) {
                   (r.decision === 'pending' && r.check_reason === ''),
               ),
             )
+            const before = g[0].qty ?? g[0].opening_balance ?? null
             return (
               <div className="projection" key={g[0].id}>
                 <b>{standardName(g[0])}</b>
                 <span>
-                  승인 당시 {qty(g[0].qty)} → 승인 후{' '}
-                  {qty(g[0].qty == null ? null : g[0].qty + p.net)}
+                  승인 당시 {qty(before)} → 승인 후{' '}
+                  {qty(before == null ? null : before + p.net)}
                 </span>
               </div>
             )
@@ -105,6 +107,7 @@ export function Daily({ day, setDay, admin }: Props) {
   const d = result.data
   const [cat, setCat] = useState(''),
     [edit, setEdit] = useState<Row | null>(null),
+    [opening, setOpening] = useState<Row[] | null>(null),
     [record, setRecord] = useState<Row | null>(null),
     [hold, setHold] = useState<Row | null>(null),
     [source, setSource] = useState<{ id: string; issue?: Issue } | null>(null),
@@ -132,7 +135,7 @@ export function Daily({ day, setDay, admin }: Props) {
   })
   for (const g of grouped(waiting.filter((r) => !problems.has(r.id)))) {
     const plan = planned(g),
-      current = g[0].qty
+      current = g[0].qty ?? g[0].opening_balance
     if (current != null && current + plan.net < 0)
       for (const r of g.filter((r) => r.direction < 0))
         problems.set(
@@ -144,6 +147,10 @@ export function Daily({ day, setDay, admin }: Props) {
             ' 부족합니다.',
         )
   }
+  const openingProblems = waiting.filter(
+    (r) => r.opening_question && problems.get(r.id) === r.opening_question,
+  )
+  const openingIds = new Set(openingProblems.map((r) => r.id))
   const unresolved = issues.filter((i) => !i.deferred)
   const groups = grouped(
     rows.filter(
@@ -272,8 +279,27 @@ export function Daily({ day, setDay, admin }: Props) {
                   <ChevronRight size={16} />
                 </button>
               ))}
+              {grouped(openingProblems).map((g) => (
+                <div key={g[0].id} className="problem-row">
+                  <button className="issue-row" onClick={() => setOpening(g)}>
+                    <span>
+                      <b>{standardName(g[0])}</b>
+                      <small>{g[0].opening_question}</small>
+                    </span>
+                    <ChevronRight size={16} />
+                  </button>
+                  {admin && g.length === 1 && (
+                    <button
+                      className="record-action"
+                      onClick={() => setHold(g[0])}
+                    >
+                      보류
+                    </button>
+                  )}
+                </div>
+              ))}
               {waiting
-                .filter((r) => problems.has(r.id))
+                .filter((r) => problems.has(r.id) && !openingIds.has(r.id))
                 .map((r) => (
                   <div className="problem-row" key={r.id}>
                     <button className="issue-row" onClick={() => openRow(r)}>
@@ -326,6 +352,22 @@ export function Daily({ day, setDay, admin }: Props) {
             {groups.map((g) => (
               <article className="day-item" key={g[0].id}>
                 <h3>{standardName(g[0])}</h3>
+                {g.some((r) => r.opening_balance != null && !completed(r)) && (
+                  <button
+                    className="textbtn"
+                    onClick={() =>
+                      setOpening(
+                        waiting.filter((r) => r.item_id === g[0].item_id),
+                      )
+                    }
+                  >
+                    첫 거래 전 재고{' '}
+                    {qty(
+                      g.find((r) => r.opening_balance != null)?.opening_balance,
+                    )}{' '}
+                    · 확인
+                  </button>
+                )}
                 {g.map((r) => (
                   <div className="day-trade" key={r.id}>
                     <span>
@@ -394,6 +436,19 @@ export function Daily({ day, setDay, admin }: Props) {
             </details>
           )}
         </>
+      )}
+      {opening && d && (
+        <OpeningBalance
+          rows={opening}
+          stamp={d.stamp}
+          admin={admin}
+          close={() => setOpening(null)}
+          saved={result.reload}
+          hold={(r) => {
+            setOpening(null)
+            setHold(r)
+          }}
+        />
       )}
       {edit && (
         <Review

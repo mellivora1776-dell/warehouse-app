@@ -104,6 +104,9 @@ export type Row = {
   posted_before?: number | null
   posted_after?: number | null
   display_name?: string
+  opening_question?: string | null
+  opening_balance?: number | null
+  opening_review?: number | null
   check_reason?: string
   related_hold?: boolean
   record_rev?: number

@@ -148,11 +148,9 @@ export async function verifyAnalysisMobile({
   )
   await navigate(page, true, 'daily', '일일 마감')
   await page.getByLabel('대상 날짜').fill(day)
-  const card = page
-    .locator('.day-item')
-    .filter({
-      has: page.getByRole('heading', { name: 'KJB3-2600', exact: true }),
-    })
+  const card = page.locator('.day-item').filter({
+    has: page.getByRole('heading', { name: 'KJB3-2600', exact: true }),
+  })
   await card.getByText('영업출고 · 현대FAN · 방문', { exact: true }).waitFor()
   await card.getByText('영업출고 · 대신화물 · 화물', { exact: true }).waitFor()
   assert.deepEqual(
@@ -163,11 +161,9 @@ export async function verifyAnalysisMobile({
   assert.equal(await page.getByText(/유환열|최병호/).count(), 0)
   await fits(page)
   await page.getByRole('heading', { name: '일일 마감', exact: true }).click()
-  const ordered = page
-    .locator('.day-item')
-    .filter({
-      has: page.getByRole('heading', { name: orderName, exact: true }),
-    })
+  const ordered = page.locator('.day-item').filter({
+    has: page.getByRole('heading', { name: orderName, exact: true }),
+  })
   await ordered
     .getByText('영업출고 · 태성FAN · 퀵(용차 배송)', { exact: true })
     .waitFor()
@@ -182,5 +178,83 @@ export async function verifyAnalysisMobile({
   assert.equal((await lookup('KJB3-2600')).qty, 0)
   console.log(
     'PASS · mobile rack total 16, independent picks 9/7, external motor pick, individual +3/−1/−1 trades, finished order +25/−25, read-only inventory, screenshots',
+  )
+}
+
+// Run through the administrator's normal screens with a separate loopback-only fixture day.
+export async function verifyConfirmedOrder({ page, rpc, navigate, fits }) {
+  let day
+  for (let i = 1; i <= 730; i++) {
+    const d = new Date(Date.UTC(2057, 0, i)).toISOString().slice(0, 10)
+    const state = await rpc('wm2_day', { p_day: d })
+    if (!state.rows.length && !state.issues.length) {
+      day = d
+      break
+    }
+  }
+  assert.ok(day)
+  const key = randomUUID(),
+    model = 'QA-주문-' + key.slice(0, 8)
+  const doc = {
+    schema_version: 2,
+    case_id: key,
+    document_id: key + '/v1',
+    version: 1,
+    work_date: day,
+    category: 'sale',
+    customer: '시험 거래처',
+    document_type: '직납출고지시서',
+    lines: [
+      {
+        line_id: '1',
+        raw_name: model,
+        spec: '220/380/50',
+        qty: 9,
+        standard_name: model,
+        standard_spec: '220/380V·50Hz',
+        variant: 'order',
+        product_kind: 'finished',
+        order_confirmed: true,
+        match_basis: '시험 주문서 및 사용자 확인',
+      },
+    ],
+  }
+  await navigate(page, true, 'intake', '분석 자료 등록')
+  await page.getByLabel('분석 결과 JSON').fill(JSON.stringify(doc))
+  await page.getByRole('button', { name: '등록 전 사전 검증' }).click()
+  await page.getByText(/확정 주문품 · 신규 SKU 생성 예정/).waitFor()
+  assert.deepEqual(await rpc('wm4_catalog', { p_query: model }), [])
+  await page.getByRole('button', { name: '검토 자료 등록' }).click()
+  await page.getByText(/검토 자료를 등록했습니다/).waitFor()
+  const [r] = (await rpc('wm2_day', { p_day: day })).rows
+  assert.ok(r.item_id)
+  assert.equal(r.check_reason, '출고 전 재고 수량 확인')
+  await navigate(page, true, 'picking', '피킹리스트')
+  await page.getByLabel('출고 날짜').fill(day)
+  await page.getByText('출고 전 재고 수량 확인', { exact: true }).waitFor()
+  assert.ok(await page.getByRole('checkbox').isEnabled())
+  await navigate(page, true, 'daily', '일일 마감')
+  await page.getByLabel('대상 날짜').fill(day)
+  const question = page.getByRole('button', {
+    name: /QA-주문-.*출고 전 재고 수량 확인/,
+  })
+  await question.click()
+  const sheet = page.getByRole('dialog', { name: '출고 전 재고 수량 확인' })
+  assert.equal(
+    await sheet.getByRole('button', { name: /SKU|품목 찾기/ }).count(),
+    0,
+  )
+  await sheet.getByLabel(/첫 창고 거래 직전 보유량/).fill('12')
+  await fits(page)
+  await sheet.getByRole('button', { name: '마감에 사용할 수량 저장' }).click()
+  await sheet.waitFor({ state: 'hidden' })
+  await page.getByRole('button', { name: /첫 거래 전 재고 12개/ }).waitFor()
+  assert.equal((await rpc('wm_item', { p_item: r.item_id })).qty, null)
+  await page.getByRole('button', { name: /일일 마감 승인/ }).click()
+  await page.getByText(/1차 마감을 저장했습니다/).waitFor()
+  assert.equal((await rpc('wm_item', { p_item: r.item_id })).qty, 3)
+  assert.ok((await rpc('wm3_preview', { p_doc: doc })).already_closed)
+  console.log(
+    'PASS · confirmed order intake, dual-voltage label, one opening question, stock stays unknown until close 12→3.',
   )
 }

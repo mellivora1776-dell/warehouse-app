@@ -127,6 +127,7 @@ class Workflow(unittest.TestCase):
         cls.sql((ROOT / "supabase/04_workflow_v2.sql").read_text())
         cls.sql((ROOT / "supabase/05_analysis.sql").read_text())
         cls.sql((ROOT / "supabase/06_records.sql").read_text())
+        cls.sql((ROOT / "supabase/07_confirmed_orders.sql").read_text())
         assert before == cls.sql(
             digest
         ), "Migration changed baseline inventory or ledger"

@@ -28,6 +28,7 @@ type PlanLine = {
   customer: string
   reason: string
   resolution: string
+  order_action?: 'create' | 'reuse'
 }
 type Preview = {
   can_submit: boolean
@@ -304,9 +305,14 @@ export function Intake({
                   {l.standard_name} {l.standard_spec}
                 </b>
                 <small>
-                  {resolutionLabels[l.resolution]} · 준비{' '}
-                  {l.pick_qty ?? '미확인'} / 재고 {l.stock_qty ?? '미확인'} ·{' '}
-                  {l.customer} {l.method_raw || l.method}
+                  {l.order_action === 'create'
+                    ? '확정 주문품 · 신규 SKU 생성 예정'
+                    : l.order_action === 'reuse'
+                      ? '확정 주문품 · 기존 SKU 연결'
+                      : resolutionLabels[l.resolution]}{' '}
+                  · 준비 {l.pick_qty ?? '미확인'} / 재고{' '}
+                  {l.stock_qty ?? '미확인'} · {l.customer}{' '}
+                  {l.method_raw || l.method}
                 </small>
                 <small>
                   원문 {l.raw_name} {l.raw_spec}

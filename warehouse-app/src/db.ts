@@ -84,6 +84,10 @@ export function message(err: unknown): string {
       }
     }
     Object.assign(msg, {
+      WM5_CONFIRM:
+        '확정한 주문품의 표준명, 사양, 모터·완성품 구분과 사용자 확인 근거를 확인하세요.',
+      WM5_IDENTITY:
+        '주문 사양과 품목 ID를 일치시킬 수 없습니다. 사전 검증 결과를 확인하세요.',
       WM3_PREFLIGHT_CHANGED:
         '마스터 또는 문서 상태가 바뀌었습니다. 다시 사전 검증해 주세요.',
       WM3_RECEIPT_MISMATCH: '사전 검증과 실제 결과가 달라 등록을 중단했습니다.',

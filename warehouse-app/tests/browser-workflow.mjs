@@ -314,7 +314,7 @@ try {
     .click()
   let dialog = a.getByRole('dialog', { name: '거래 검토' })
   await dialog.getByLabel('검토 수량').fill('2')
-  await dialog.getByText(/현재 10개 → 예상 6개/).waitFor()
+  await dialog.getByText(/장부 10개 → 예상 6개/).waitFor()
   await fits(a)
   await dialog.getByRole('button', { name: '검토 저장' }).click()
   await dialog.waitFor({ state: 'hidden' })
@@ -325,7 +325,7 @@ try {
     .click()
   dialog = a.getByRole('dialog', { name: '거래 검토' })
   await dialog.getByLabel('검토 수량').fill('1')
-  await dialog.getByText(/현재 10개 → 예상 7개/).waitFor()
+  await dialog.getByText(/장부 10개 → 예상 7개/).waitFor()
   await dialog.getByRole('button', { name: '검토 저장' }).click()
   await dialog.waitFor({ state: 'hidden' })
   await card

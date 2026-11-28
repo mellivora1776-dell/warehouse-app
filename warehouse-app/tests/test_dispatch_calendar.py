@@ -1,4 +1,4 @@
-"""Exercise the v2.3 intake, calendar and close against an isolated PostgreSQL instance."""
+"""Exercise the current intake, calendar and close against an isolated PostgreSQL instance."""
 
 import concurrent.futures
 import datetime
@@ -38,6 +38,8 @@ class Calendar(unittest.TestCase):
         cls.before = api.stock_snapshot()
         cls.sql((old.ROOT / "supabase/08_confirmed_work.sql").read_text())
         assert api.stock_snapshot() == cls.before
+        cls.sql((old.ROOT / "supabase/09_optional_opening.sql").read_text())
+        assert api.stock_snapshot() == cls.before
 
     def stock_snapshot(self):
         return self.sql(
@@ -62,7 +64,15 @@ class Calendar(unittest.TestCase):
         day_rows = self.read(day)["rows"]
         self.assertEqual(len(day_rows), 5)
         self.assertEqual(len({r["item_id"] for r in day_rows}), 4)
-        self.assertTrue(all(r["awaiting_opening"] for r in day_rows))
+        self.assertFalse(any(r["awaiting_opening"] for r in day_rows))
+        self.assertTrue(
+            all(
+                r["opening_balance"] is None
+                and r["book_qty"] == 0
+                and not r["check_reason"]
+                for r in day_rows
+            )
+        )
         for d, sku in self.original:
             if d["category"] == "production_in":
                 c = self.confirmation(d, sku, 0)
@@ -71,7 +81,10 @@ class Calendar(unittest.TestCase):
                 self.assertTrue(self.send(c)["duplicate"])
         self.assertEqual(self.stock_snapshot(), before)
         rows = self.read(day)["rows"]
-        self.assertEqual([r["final_qty"] for r in rows if r["awaiting_opening"]], [9])
+        self.assertEqual(
+            [r["final_qty"] for r in rows if r["id"] in self.read(day)["shortages"]],
+            [9],
+        )
         self.assertEqual(self.approve(day)["count"], 4)
         self.assertIn(day, self.call("wm2_open_days"))
         d, sku = self.original[-1]
@@ -92,7 +105,8 @@ class Calendar(unittest.TestCase):
 
     def test_first_receipt_and_independent_outgoing(self):
         day = "2021-11-11"
-        doc = self.doc(day, "신규-CSP-350S", "CSP", 10, first_warehouse_receipt=True)
+        doc = self.doc(day, "CSP-350S", "CSP", 10)
+        doc["customer"] = "에스엔애프"
         spec = self.preview(doc)
         self.assertTrue(spec["can_submit"], spec["blockers"])
         sku = spec["lines"][0]["item_id"]
@@ -110,11 +124,18 @@ class Calendar(unittest.TestCase):
         self.assertEqual(self.read(day)["rows"][0]["check_reason"], "")
         self.assertEqual(self.approve(day)["count"], 1)
         self.assertEqual(self.quantity(sku), 10)
+        self.assertEqual(
+            self.sql(
+                "select opening_qty is null from warehouse_master.items where id="
+                + old.quote(sku)
+            ),
+            "t",
+        )
         self.assertEqual(len(self.call("wm2_log", {"item": sku})["rows"]), 1)
         self.assertTrue(self.send(doc)["already_closed"])
         self.assertFalse(
             self.preview(
-                self.doc(day, "신규-CSP-350S", "CSP", 2, first_warehouse_receipt=True)
+                self.doc(day, "CSP-350S", "CSP", 2, first_warehouse_receipt=True)
             )["can_submit"]
         )
 
@@ -138,7 +159,7 @@ class Calendar(unittest.TestCase):
         )
         self.assertEqual(self.stock_snapshot(), initial)
         unknown = self.doc("2021-11-12", "X2", "440/60", 9, "sale")
-        self.assertFalse(self.preview(unknown)["can_submit"])
+        self.assertTrue(self.preview(unknown)["can_submit"])
         confirmed = {
             **unknown,
             "lines": [{**unknown["lines"][0], "opening_before": 12}],
@@ -205,8 +226,8 @@ class Calendar(unittest.TestCase):
     def test_concurrent_in_and_out_one_sku(self):
         day = "2021-11-19"
         docs = [
-            self.doc(day, "동시주문", "440/60", 1, first_warehouse_receipt=True),
-            self.doc(day, "동시주문", "440V·60Hz", 1, "sale", opening_before=0),
+            self.doc(day, "동시주문", "440/60", 1),
+            self.doc(day, "동시주문", "440V·60Hz", 1, "sale"),
         ]
         plans = [self.preview(d) for d in docs]
         self.assertEqual(len({p["lines"][0]["item_id"] for p in plans}), 1)
@@ -245,6 +266,257 @@ class Calendar(unittest.TestCase):
         self.assertTrue(self.send(changed)["duplicate"])
         self.assertEqual(self.approve(day)["count"], 1)
         self.assertEqual(self.quantity(row["item_id"]), 3)
+
+    def test_confirmed_manifest_matches_live_lines_and_approval_receipts(self):
+        day = "2021-11-21"
+        motor = self.doc(
+            day,
+            "시험-조립 모터",
+            "440/60",
+            2,
+            "production_out",
+            kind="motor",
+            opening_before=2,
+        )
+        inc = self.doc(day, "KJM432-2200", "440/60 H형 주물 24Φ", 1)
+        sale = self.doc(day, "KJM432-2200", "440/60 H형 주물 24Φ", 1, "sale")
+        sale["customer"] = "우경풍력"
+        # This manifest is the confirmed source, independent of the list successfully transmitted.
+        manifest = [
+            (motor, "production_out", 2, ""),
+            (inc, "production_in", 1, ""),
+            (sale, "sale", 1, "우경풍력"),
+        ]
+        for doc in (inc, sale):
+            self.send(doc)
+        self.assertEqual(
+            [d for d, _, _, _ in manifest if not self.preview(d)["duplicate"]], [motor]
+        )
+        self.send(motor)
+        for doc, category, amount, customer in manifest:
+            back = self.preview(doc)["registration"]
+            self.assertEqual(back["differences"], [])
+            [row] = back["lines"]
+            self.assertEqual(
+                (row["category"], row["final_qty"], row["customer"], row["method"]),
+                (category, amount, customer, doc["method"]),
+            )
+            self.assertIsNone(row["entry_id"])
+            self.assertIsNone(row["batch_id"])
+        self.assertEqual(len(self.read(day)["rows"]), 3)
+        self.assertEqual(self.read(day)["shortages"], {})
+        closed = self.approve(day)
+        for doc, category, amount, _ in manifest:
+            [actual] = self.preview(doc)["registration"]["lines"]
+            self.assertIsNotNone(actual["approved_at"])
+            self.assertIsNotNone(actual["entry_id"])
+            self.assertEqual(actual["batch_id"], closed["id"])
+            self.assertEqual(
+                actual["after_qty"] - actual["before_qty"],
+                amount if category == "production_in" else -amount,
+            )
+        self.assertEqual(
+            self.quantity(self.preview(sale)["registration"]["lines"][0]["item_id"]), 0
+        )
+        self.assertTrue(self.send(sale)["duplicate"])
+        self.assertEqual(len(self.read(day)["batches"]), 1)
+
+    def test_held_incoming_oversize_line_and_independent_close(self):
+        day = "2021-11-24"
+        big = self.doc(day, "KJ1AB-495", "220/50", 9, "sale", opening_before=None)
+        big["customer"] = "대명특수전기"
+        self.send(big)
+        sku = self.preview(big)["registration"]["lines"][0]["item_id"]
+        inc = self.doc(day, "KJ1AB-495", "220/50", 5)
+        self.send(inc)
+        small = self.doc(day, "KJ1AB-495", "220/50", 4, "sale")
+        self.send(small)
+        other = self.doc(day, "에스엔-시험", "신형", 10)
+        self.send(other)
+        data = self.read(day)
+        rows = {r["external_id"]: r for r in data["rows"]}
+        a, b, c = (rows[d["document_id"]] for d in (big, inc, small))
+        self.assertEqual(
+            data["shortages"],
+            {a["id"]: dict(book=0, incoming=5, available=5, outgoing=9, short=4)},
+        )
+        self.assertIn(a["id"], [r["id"] for r in self.call("wm6_picking", day)["rows"]])
+        self.call("wm2_pick", a["id"], a["rev"], True)
+        self.call(
+            "wm3_review",
+            b["id"],
+            b["rev"],
+            sku,
+            5,
+            None,
+            "",
+            "hold",
+            "승인 대상 입고에서 제외",
+            0,
+            5,
+        )
+        state = self.read(day)
+        self.assertEqual(
+            {k: v["short"] for k, v in state["shortages"].items()},
+            {a["id"]: 9, c["id"]: 4},
+        )
+        self.assertTrue(all(v["incoming"] == 0 for v in state["shortages"].values()))
+        self.assertIsNone(self.quantity(sku))
+        req = str(uuid.uuid4())
+        first = self.call("wm2_close", day, state["stamp"], req)
+        self.assertEqual(first["count"], 1)
+        self.assertTrue(self.call("wm2_close", day, state["stamp"], req)["duplicate"])
+        self.assertIsNone(self.quantity(sku))
+        self.assertTrue(
+            self.preview(big)["registration"]["lines"][0]["entry_id"] is None
+        )
+        held = next(r for r in self.read(day)["rows"] if r["id"] == b["id"])
+        self.call(
+            "wm3_review",
+            b["id"],
+            held["rev"],
+            sku,
+            5,
+            None,
+            "",
+            "ready",
+            "입고 승인 대상",
+            0,
+            5,
+        )
+        self.assertEqual(self.approve(day)["count"], 2)
+        self.assertEqual(self.quantity(sku), 1)
+        self.assertEqual(self.read(day)["shortages"][a["id"]]["short"], 8)
+        self.assertIn(day, self.call("wm2_open_days"))
+        self.assertEqual(
+            self.sql(
+                "select count(*) from warehouse_master.entries where item_id="
+                + old.quote(sku)
+                + " and kind in ('opening','count')"
+            ),
+            "0",
+        )
+
+    def test_unknown_imported_item_accepts_draft_without_inventing_opening(self):
+        day = "2021-11-25"
+        sku = self.ids["QA-163"]
+        self.sql(
+            "update warehouse_master.items set qty=null,opening_qty=null where id="
+            + old.quote(sku)
+        )
+        d = self.doc(day, "QA-163", "", 1, "sale")
+        d["lines"] = [
+            dict(
+                line_id="1", item_id=sku, raw_name="QA-163", qty=1, opening_before=None
+            )
+        ]
+        self.send(d)
+        [row] = self.read(day)["rows"]
+        self.assertIsNone(row["book_qty"])
+        self.assertIn("기존 품목", row["check_reason"])
+        self.assertEqual(self.read(day)["shortages"], {})
+        self.assertIn(
+            row["id"], [r["id"] for r in self.call("wm6_picking", day)["rows"]]
+        )
+        self.assertIsNone(self.quantity(sku))
+
+    def test_reread_reports_edited_line_even_when_row_count_is_the_same(self):
+        day = "2021-11-26"
+        doc = self.doc(day, "재조회 주문", "440/60", 3, "sale")
+        self.send(doc)
+        [r] = self.read(day)["rows"]
+        self.call(
+            "wm3_review",
+            r["id"],
+            r["rev"],
+            r["item_id"],
+            2,
+            "화물",
+            "변경 거래처",
+            "ready",
+            "원문 정정",
+            2,
+            2,
+        )
+        receipt = self.preview(doc)["registration"]
+        [change] = receipt["differences"]
+        self.assertEqual(change["line_id"], "1")
+        self.assertTrue(
+            {"final_qty", "pick_qty", "stock_qty", "customer", "method"}
+            <= set(change["fields"])
+        )
+        self.assertIsNone(receipt["lines"][0]["entry_id"])
+
+    def test_partial_close_is_atomic_and_admin_only(self):
+        day = "2021-12-01"
+        docs = [self.doc(day, "원자성-" + n, "440/60", 1) for n in ("가", "나")]
+        skus = [self.send(d)["stored_lines"][0]["item_id"] for d in docs]
+        refused = self.call(
+            "wm2_close",
+            day,
+            self.read(day)["stamp"],
+            str(uuid.uuid4()),
+            actor=old.STAFF,
+            fail=True,
+        )
+        self.assertIn("WM_READ_ONLY", refused)
+        self.sql(
+            """create function public.qa_fail_close() returns trigger language plpgsql as $$begin
+          if exists(select from warehouse_master.posted_lines where batch_id=new.batch_id and line_id<>new.line_id)
+           then raise exception 'QA_ROLLBACK';end if;return new;end$$;
+          create trigger fail_close after insert on warehouse_master.posted_lines for each row execute function public.qa_fail_close();"""
+        )
+        try:
+            self.assertIn("QA_ROLLBACK", self.approve(day, True))
+            self.assertEqual([self.quantity(s) for s in skus], [None, None])
+            self.assertEqual(self.read(day)["batches"], [])
+            self.assertTrue(
+                all(row["entry_id"] is None for row in self.read(day)["rows"])
+            )
+        finally:
+            self.sql("drop trigger fail_close on warehouse_master.posted_lines")
+        self.assertEqual(self.approve(day)["count"], 2)
+
+    def test_samsung_visit_is_one_instruction_on_both_dates(self):
+        day = "2022-11-24"
+        names = ["KJB3-1500S", "32A 휠터"]
+        for i, name in enumerate(names):
+            self.sql(
+                "update warehouse_master.items set name="
+                + old.quote(name)
+                + " where id="
+                + old.quote(self.ids["QA-" + str(158 + i)])
+            )
+        doc = self.doc(day, names[0], "", 1, "sale")
+        doc.update(
+            customer="삼성전기", method="방문", source_time="2022-11-23T13:00:00+09:00"
+        )
+        doc["lines"] = [
+            dict(line_id=str(i), raw_name=name, qty=1, remarks="오전 9시 방문")
+            for i, name in enumerate(names)
+        ]
+        result = self.send(doc)
+        self.assertTrue(self.send(doc)["duplicate"])
+
+        def picks(as_of):
+            return [
+                r
+                for r in self.call("wm6_picking", as_of)["rows"]
+                if r["document_id"] == result["id"]
+            ]
+
+        tomorrow, today = picks("2022-11-23"), picks(day)
+        self.assertEqual(tomorrow, today)
+        self.assertEqual(
+            [
+                (r["standard_name"], r["work_day"], r["pick_qty"], r["method"])
+                for r in today
+            ],
+            [(n, day, 1, "방문") for n in names],
+        )
+        self.assertEqual(self.read("2022-11-23")["rows"], [])
+        self.assertTrue(all(self.quantity(r["item_id"]) == 40 for r in today))
+        self.assertFalse(self.read(day)["batches"])
 
     def test_lost_update_shortage_and_duplicate_close(self):
         day = "2021-11-14"

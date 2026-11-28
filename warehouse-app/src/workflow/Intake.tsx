@@ -35,6 +35,15 @@ type Preview = {
   stamp: string
   blockers: string[]
   lines: PlanLine[]
+  registration?: {
+    status: string
+    lines: {
+      line_id: string
+      batch_id: string | null
+      entry_id: number | null
+    }[]
+    differences: { line_id: string; fields: string[] }[]
+  }
   duplicate: boolean
   status: string
 }
@@ -43,6 +52,7 @@ type IntakeResult = {
   duplicate: boolean
   status: string
   record_type?: string
+  postedCount?: number
   already_closed?: boolean
   verified: boolean
   stored_lines: PlanLine[]
@@ -219,14 +229,32 @@ export function Intake({
       const record = await rpc<IntakeResult>('wm2_import', {
         p_doc: { ...doc, preview_stamp: checked.stamp },
       })
+      // A second RPC sees the committed rows, including edits or a revision racing this response.
+      const reread = await rpc<Preview>('wm3_preview', { p_doc: doc })
+      if (start !== version.current) return
+      if (!reread.duplicate)
+        throw new Error('현장 확인 완료 · 등록 누락 · ' + doc.document_id)
+      if (record.record_type === 'opening_confirmation') {
+        if (!record.verified || !reread.can_submit)
+          throw new Error('이전 보유량 근거를 다시 조회하지 못했습니다.')
+      } else {
+        const saved = reread.registration
+        if (!saved || !record.verified || saved.differences.length > 0) {
+          const detail = saved?.differences
+            .map((x) => '행 ' + x.line_id + ' (' + x.fields.join(', ') + ')')
+            .join(' · ')
+          throw new Error(
+            [doc.document_id, '확정 자료와 저장된 거래가 다릅니다.', detail]
+              .filter(Boolean)
+              .join(' · '),
+          )
+        }
+        record.status = saved.status
+        record.postedCount = saved.lines.filter(
+          (r) => r.batch_id && r.entry_id != null,
+        ).length
+      }
       setReceived(record)
-      if (
-        !record.verified ||
-        record.stored_lines?.length !== checked.lines.length
-      )
-        throw new Error(
-          '기존 저장 결과가 사전 검증과 다릅니다. 등록한 버전에서 거래 검토 내역을 확인하세요.',
-        )
       setDay(doc.work_date)
       changed()
       result.reload()
@@ -336,13 +364,15 @@ export function Intake({
       </form>
       {received?.verified && (
         <p role="status" className="callout">
-          {received.duplicate
-            ? '이미 등록된 문서입니다.'
-            : received.record_type === 'opening_confirmation'
-              ? '기존 거래에 보유량 확인을 연결했습니다.'
-              : '확정 자료를 등록했습니다. 저장값을 대조했습니다.'}{' '}
-          {received.already_closed
-            ? '기존 마감 확인됨'
+          {received.status !== 'current' && !received.record_type
+            ? '기존 문서 상태를 확인했습니다.'
+            : received.duplicate
+              ? '이미 등록된 문서입니다.'
+              : received.record_type === 'opening_confirmation'
+                ? '기존 거래에 보유량 확인을 연결했습니다.'
+                : '확정 자료를 등록했습니다. 저장값을 대조했습니다.'}{' '}
+          {received.postedCount
+            ? '마감·수불 기록 확인 ' + received.postedCount + '행'
             : received.status === 'dismissed'
               ? '취소된 버전'
               : received.status === 'previous'

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "재고 마스터 미승인 자료 등록",
-    "version": "2.3.0",
+    "version": "2.4.0",
     "description": "미승인 거래를 저장합니다. 사용자 확정 주문품은 기존 SKU에 연결하거나 한 번 생성합니다. 창고 증감은 일일 마감 승인 때 반영됩니다."
   },
   "servers": [
@@ -15,7 +15,7 @@
       "post": {
         "operationId": "previewWarehouseDocument",
         "summary": "저장 전 문서와 각 행의 실제 처리 결과 확인",
-        "description": "읽기 전용. can_submit, blockers와 모든 lines를 확인한다.",
+        "description": "읽기 전용. 등록 전에는 품목·사양·수량·거래처·방식을 검증하고, 등록 후에는 같은 문서의 registration.lines와 differences를 최종 확정한 거래 목록과 대조한다.",
         "x-openai-isConsequential": false,
         "security": [
           {
@@ -105,7 +105,7 @@
       "post": {
         "operationId": "submitWarehouseDocument",
         "summary": "분석한 문서 한 버전을 검토 대상으로 등록",
-        "description": "사용자가 등록을 요청하고 사전 검증을 확인한 뒤, 동일 문서에 preview_stamp를 넣어 미승인 접수. verified와 stored_lines를 대조한다.",
+        "description": "확정한 문서를 미승인 접수하고 별도 조회로 각 저장 행을 대조한다. 실제 재고는 관리자의 일일 마감 승인 때 반영한다.",
         "x-openai-isConsequential": true,
         "security": [
           {
@@ -553,11 +553,11 @@
                   ],
                   "minimum": 0,
                   "maximum": 2147483647,
-                  "description": "order_confirmed 행 전용. 사용자가 확인한 작업일 첫 창고 거래 직전 보유량. 미확인은 생략 또는 null. 입출고량에서 추정하지 않는다. 마감 전 검토 값."
+                  "description": "확정 주문품의 실제 직전 보유량을 아는 경우에만 입력한다. 생략 또는 null이면 입출고·피킹을 그대로 접수한다."
                 },
                 "first_warehouse_receipt": {
                   "type": "boolean",
-                  "description": "그 주문 사양의 실제 첫 창고 생산입고를 채팅에서 확인한 경우에만 true. 첫 입고 전에 수량을 다시 입력할 필요가 없다."
+                  "description": "실제 첫 창고 입고라는 선택 근거. 접수·마감에 필수가 아니며 이 표시로 보유량을 생성하지 않는다."
                 }
               },
               "additionalProperties": false
@@ -799,7 +799,7 @@
             ],
             "minimum": 0,
             "maximum": 2147483647,
-            "description": "order_confirmed 행 전용. 사용자가 확인한 작업일 첫 창고 거래 직전 보유량. 미확인은 생략 또는 null. 입출고량에서 추정하지 않는다. 마감 전 검토 값."
+            "description": "확정 주문품의 실제 직전 보유량을 아는 경우에만 입력한다. 생략 또는 null이면 입출고·피킹을 그대로 접수한다."
           },
           "variant_key": {
             "type": "string",
@@ -833,6 +833,9 @@
             "items": {
               "$ref": "#/components/schemas/PlanLine"
             }
+          },
+          "registration": {
+            "$ref": "#/components/schemas/Registration"
           }
         }
       },
@@ -862,11 +865,14 @@
           },
           "already_closed": {
             "type": "boolean",
-            "description": "기존 문서의 마감 확인 여부"
+            "description": "기존 문서에서 마감된 행이 하나 이상 있는지 표시한다. 각 행의 실제 재고 반영은 registration.lines에서 승인·수불 이력을 확인한다."
           },
           "record_type": {
             "type": "string",
             "description": "기존 거래 보유량 보완은 opening_confirmation"
+          },
+          "registration": {
+            "$ref": "#/components/schemas/Registration"
           }
         }
       },
@@ -923,6 +929,167 @@
           },
           "preview_stamp": {
             "type": "string"
+          }
+        }
+      },
+      "RegisteredLine": {
+        "type": "object",
+        "properties": {
+          "line_id": {
+            "type": "string"
+          },
+          "raw_name": {
+            "type": "string"
+          },
+          "raw_spec": {
+            "type": "string"
+          },
+          "raw_qty": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "final_qty": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "standard_name": {
+            "type": "string"
+          },
+          "standard_spec": {
+            "type": "string"
+          },
+          "product_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "variant": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "customer": {
+            "type": "string"
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "method_raw": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pick_required": {
+            "type": "boolean"
+          },
+          "pick_qty": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stock_managed": {
+            "type": "boolean"
+          },
+          "stock_qty": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "decision": {
+            "type": "string"
+          },
+          "batch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approved_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entry_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "before_qty": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "after_qty": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "Registration": {
+        "type": "object",
+        "description": "저장 후 별도 조회한 문서, 행별 수량·처리 상태와 차이. 승인 근거는 행별 batch_id, approved_at, entry_id로 확인한다.",
+        "properties": {
+          "document_id": {
+            "type": "string"
+          },
+          "case_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "work_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "status": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegisteredLine"
+            }
+          },
+          "differences": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "line_id": {
+                  "type": "string"
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
           }
         }
       }

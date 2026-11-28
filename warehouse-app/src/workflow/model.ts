@@ -108,6 +108,7 @@ export type Row = {
   opening_balance?: number | null
   opening_review?: number | null
   check_reason?: string
+  book_qty?: number | null
   awaiting_opening?: boolean
   related_hold?: boolean
   record_rev?: number
@@ -136,11 +137,19 @@ export type Batch = {
   actor: string
   lines: number
 }
+export type Shortage = {
+  book: number
+  incoming: number
+  available: number
+  outgoing: number
+  short: number
+}
 export type DayData = {
   rows: Row[]
   issues: Issue[]
   batches: Batch[]
   stamp: string
+  shortages?: Record<string, Shortage>
   removed: {
     doc: string
     external_id: string

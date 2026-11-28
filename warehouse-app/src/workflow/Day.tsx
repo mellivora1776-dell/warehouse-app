@@ -1,4 +1,3 @@
-import { OpeningBalance } from './OpeningBalance'
 import { useState } from 'react'
 import { ChevronRight, AlertCircle } from 'lucide-react'
 import { rpc } from '../db'
@@ -28,6 +27,7 @@ import {
   timeKo,
   type DayData,
   type Row,
+  type Shortage,
   type Issue,
   type Batch,
 } from './model'
@@ -43,6 +43,22 @@ type Props = {
   openDays: string[]
   changed: () => void
 }
+function shortageLabel(r: Row, s: Shortage) {
+  const unit =
+    r.product_kind === 'finished' || r.product_kind === 'motor' ? '대' : '개'
+  const n = (value: number) => value.toLocaleString('ko-KR') + unit
+  return [
+    r.category === 'sale' ? r.customer : categoryLabels[r.category],
+    '장부 ' + n(s.book),
+    ...(s.incoming ? ['승인 대상 입고 ' + n(s.incoming)] : []),
+    ...(s.available !== s.book + s.incoming
+      ? ['남은 수량 ' + n(s.available)]
+      : []),
+    '출고 ' + n(s.outgoing),
+    n(s.short) + ' 부족',
+  ].join(' · ')
+}
+
 export function BatchDetails({ id, close }: { id: string; close: () => void }) {
   const result = useData<{
     work_day: string
@@ -66,11 +82,13 @@ export function BatchDetails({ id, close }: { id: string; close: () => void }) {
             const p = planned(
               g.filter(
                 (r) =>
-                  r.decision === 'ready' ||
-                  (r.decision === 'pending' && r.check_reason === ''),
+                  !d.reviewed.shortages?.[r.id] &&
+                  (r.decision === 'ready' ||
+                    (r.decision === 'pending' && r.check_reason === '')),
               ),
             )
-            const before = g[0].qty ?? g[0].opening_balance ?? null
+            const before =
+              g[0].book_qty ?? g[0].qty ?? g[0].opening_balance ?? null
             return (
               <div className="projection" key={g[0].id}>
                 <b>{standardName(g[0])}</b>
@@ -88,11 +106,13 @@ export function BatchDetails({ id, close }: { id: string; close: () => void }) {
                 {rowLabel(r)} · {qty(r.final_qty)} ·{' '}
                 {completed(r)
                   ? '이전 차수 확정'
-                  : r.related_hold
-                    ? '보류'
-                    : r.decision === 'pending' && r.check_reason === ''
-                      ? '승인'
-                      : decisions[r.decision]}
+                  : d.reviewed.shortages?.[r.id]
+                    ? '재고 부족으로 이번 마감 보류'
+                    : r.related_hold
+                      ? '보류'
+                      : r.decision === 'pending' && r.check_reason === ''
+                        ? '승인'
+                        : decisions[r.decision]}
               </div>
               {r.reason && <small>{r.reason}</small>}
             </div>
@@ -133,34 +153,21 @@ export function Daily({
     (r) =>
       !completed(r) &&
       !['hold', 'exclude'].includes(r.decision) &&
-      !r.related_hold &&
-      !r.awaiting_opening,
+      !r.related_hold,
   )
   const held = rows.filter(
     (r) =>
       !completed(r) &&
       r.decision !== 'exclude' &&
-      (r.decision === 'hold' || r.related_hold || r.awaiting_opening),
+      (r.decision === 'hold' || r.related_hold),
   )
   const problems = new Map<string, string>()
   waiting.forEach((r) => {
     const msg = attention(r)
     if (msg) problems.set(r.id, msg)
   })
-  for (const g of grouped(waiting.filter((r) => !problems.has(r.id)))) {
-    const plan = planned(g),
-      current = g[0].qty ?? g[0].opening_balance
-    if (current != null && current + plan.net < 0)
-      for (const r of g.filter((r) => r.direction < 0))
-        problems.set(
-          r.id,
-          '현재 ' +
-            qty(current) +
-            ' · 마감에 ' +
-            qty(-current - plan.net) +
-            ' 부족합니다.',
-        )
-  }
+  const shortages = d?.shortages ?? {}
+  const shortRows = waiting.filter((r) => shortages[r.id])
   const unresolved = issues.filter((i) => !i.deferred)
   const groups = grouped(
     rows.filter(
@@ -168,10 +175,14 @@ export function Daily({
         r.decision !== 'exclude' &&
         !held.includes(r) &&
         !problems.has(r.id) &&
+        !shortages[r.id] &&
         (!cat || r.category === cat),
     ),
   )
-  const count = waiting.filter((r) => !problems.has(r.id)).length
+  const eligible = waiting.filter(
+    (r) => !problems.has(r.id) && !shortages[r.id],
+  )
+  const count = eligible.length
   const future = day > koreaDay
   const blocked = !!unresolved.length || !!problems.size
   const scope = 'close:' + day
@@ -187,11 +198,35 @@ export function Daily({
   async function approve() {
     if (!d || future || blocked || !count) return
     await task.run(async () => {
-      const b = await rpc<{ sequence: number }>('wm2_close', {
+      const b = await rpc<{ id: string; sequence: number }>('wm2_close', {
         p_day: day,
         p_stamp: d.stamp,
         p_request: requestId(scope, d.stamp),
       })
+      const posted = await rpc<DayData>('wm2_day', { p_day: day })
+      const batchRows = new Map(
+        posted.rows.filter((r) => r.batch_id === b.id).map((r) => [r.id, r]),
+      )
+      if (
+        !posted.batches.some(
+          (batch) => batch.id === b.id && batch.approved_at,
+        ) ||
+        !eligible.every((r) => {
+          const actual = batchRows.get(r.id)
+          return (
+            actual &&
+            (!r.stock_managed ||
+              (actual.entry_id != null &&
+                actual.posted_after != null &&
+                actual.posted_before != null &&
+                actual.posted_after - actual.posted_before ===
+                  r.direction * (r.stock_qty ?? 0)))
+          )
+        })
+      )
+        throw new Error(
+          '마감 기록과 수불 행을 대조하지 못했습니다. 새로고침해 해당 차수를 확인하세요.',
+        )
       doneRequest(scope)
       setSuccess(day + ' ' + b.sequence + '차 마감을 저장했습니다.')
       reload()
@@ -339,24 +374,38 @@ export function Daily({
                 ))}
             </section>
           )}
+          {shortRows.length > 0 && (
+            <section className="attention-list" aria-label="재고 부족">
+              <h3>재고 부족 · 이번 마감 보류 {shortRows.length}건</h3>
+              {shortRows.map((r) => (
+                <button
+                  key={r.id}
+                  className="issue-row"
+                  onClick={() => openRow(r)}
+                >
+                  <span>
+                    <b>{standardName(r)}</b>
+                    <small>{shortageLabel(r, shortages[r.id])}</small>
+                  </span>
+                  <ChevronRight size={16} />
+                </button>
+              ))}
+            </section>
+          )}
           {(held.length > 0 || issues.some((i) => i.deferred)) && (
             <details className="expand held-list">
               <summary>
                 보류 {held.length + issues.filter((i) => i.deferred).length}건
               </summary>
-              {held.map((r) =>
-                r.awaiting_opening ? (
-                  <OpeningBalance key={r.id} row={r} />
-                ) : (
-                  <button
-                    className="issue-row"
-                    key={r.id}
-                    onClick={() => openRow(r)}
-                  >
-                    {standardName(r)} · {r.reason || '관련 문서 보류'}
-                  </button>
-                ),
-              )}
+              {held.map((r) => (
+                <button
+                  className="issue-row"
+                  key={r.id}
+                  onClick={() => openRow(r)}
+                >
+                  {standardName(r)} · {r.reason || '관련 문서 보류'}
+                </button>
+              ))}
               {issues
                 .filter((i) => i.deferred)
                 .map((i) => (
@@ -404,7 +453,7 @@ export function Daily({
               </article>
             ))}
           </div>
-          {!groups.length && !blocked && !held.length && (
+          {!groups.length && !blocked && !held.length && !shortRows.length && (
             <Empty
               title={
                 cat ? '선택한 유형의 거래가 없습니다' : '표시할 거래가 없습니다'
@@ -424,6 +473,9 @@ export function Daily({
                 onClick={() => void approve()}
               >
                 {day} 일일 마감 승인 · {count}건
+                {shortRows.length
+                  ? ' (부족 ' + shortRows.length + '건 보류)'
+                  : ''}
               </button>
             </div>
           )}
@@ -446,7 +498,7 @@ export function Daily({
       {edit && (
         <Review
           row={edit}
-          all={rows}
+          all={rows.filter((r) => !shortages[r.id] && !problems.has(r.id))}
           close={() => setEdit(null)}
           saved={reload}
         />

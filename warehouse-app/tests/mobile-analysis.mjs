@@ -217,32 +217,52 @@ export async function verifyConfirmedOrder({ page, rpc, navigate, fits }) {
   await navigate(page, true, 'intake', '분석 자료 등록')
   await page.getByLabel('분석 결과 JSON').fill(JSON.stringify(doc))
   await page.getByRole('button', { name: '확정 자료 등록' }).click()
-  await page.getByText(/출고 직전 보유량을 채팅에서/).waitFor()
-  assert.deepEqual(await rpc('wm4_catalog', { p_query: model }), [])
-  doc.lines[0].opening_before = 12
-  await page.getByLabel('분석 결과 JSON').fill(JSON.stringify(doc))
-  await page.getByRole('button', { name: '확정 자료 등록' }).click()
   await page.getByText(/확정 자료를 등록했습니다/).waitFor()
   const [r] = (await rpc('wm2_day', { p_day: day })).rows
   assert.ok(r.item_id)
-  assert.equal(r.check_reason, '')
+  const before = await rpc('wm3_preview', { p_doc: doc })
+  assert.deepEqual(before.registration.differences, [])
+  assert.equal(before.registration.lines[0].entry_id, null)
+  const independent = {
+    ...doc,
+    case_id: key + '-in',
+    document_id: key + '-in/v1',
+    category: 'production_in',
+    document_type: '생산입고',
+    customer: '',
+    lines: [
+      {
+        ...doc.lines[0],
+        raw_name: model + '-CSP',
+        standard_name: model + '-CSP',
+        qty: 10,
+      },
+    ],
+  }
+  const p = await rpc('wm3_preview', { p_doc: independent })
+  await rpc('wm2_import', { p_doc: { ...independent, preview_stamp: p.stamp } })
+  const catalog = await rpc('wm4_catalog', { p_query: model })
+  assert.equal(catalog.length, 2)
   await navigate(page, true, 'daily', '일일 마감')
   await page.getByLabel('대상 날짜').fill(day)
-  await page
-    .getByText(model + '(220/380/50) [주문품]', { exact: true })
-    .waitFor()
-  assert.equal(
-    await page.getByRole('button', { name: /첫 거래 전 재고/ }).count(),
-    0,
-  )
+  await page.getByText('시험 거래처 · 장부 0대 · 출고 9대 · 9대 부족').waitFor()
   assert.equal((await rpc('wm_item', { p_item: r.item_id })).qty, null)
   await fits(page)
-  await page.getByRole('button', { name: /일일 마감 승인/ }).click()
+  await page
+    .getByRole('button', { name: /일일 마감 승인 · 1건.*부족 1건 보류/ })
+    .click()
   await page.getByText(/1차 마감을 저장했습니다/).waitFor()
-  assert.equal((await rpc('wm_item', { p_item: r.item_id })).qty, 3)
-  assert.ok((await rpc('wm3_preview', { p_doc: doc })).already_closed)
+  assert.equal((await rpc('wm_item', { p_item: r.item_id })).qty, null)
+  const committed = await rpc('wm3_preview', { p_doc: independent })
+  assert.equal(committed.registration.lines[0].after_qty, 10)
+  assert.ok(committed.registration.lines[0].entry_id)
+  assert.ok(committed.registration.lines[0].batch_id)
+  assert.equal(
+    (await rpc('wm3_preview', { p_doc: doc })).registration.lines[0].batch_id,
+    null,
+  )
   console.log(
-    'PASS · confirmed order intake, dual-voltage label, chat-confirmed opening, one-click intake, stock stays unknown until close 12→3.',
+    'PASS · blank opening, committed line readback, exact shortage and independent approval from a mobile device.',
   )
 }
 export async function verifyShippingCalendar({
@@ -309,19 +329,15 @@ export async function verifyShippingCalendar({
   await navigate(page, true, 'picking', '피킹리스트')
   await page.getByRole('heading', { name: '다음 출고 예정' }).waitFor()
   const future = page.locator('.pick-date[data-day="' + next + '"]')
-  const section = future
-    .locator('.pick-section')
-    .filter({
-      has: page.getByRole('heading', {
-        name: customer + ' · 오전 9시 방문',
-        exact: true,
-      }),
-    })
-  const wing = section
-    .locator('.pick-item')
-    .filter({
-      has: page.getByRole('heading', { name: 'KTB-012T 날개', exact: true }),
-    })
+  const section = future.locator('.pick-section').filter({
+    has: page.getByRole('heading', {
+      name: customer + ' · 오전 9시 방문',
+      exact: true,
+    }),
+  })
+  const wing = section.locator('.pick-item').filter({
+    has: page.getByRole('heading', { name: 'KTB-012T 날개', exact: true }),
+  })
   await wing.getByRole('checkbox').check()
   await wing.locator('input:checked').waitFor()
   assert.equal(await wing.locator('.rack-line').count(), 0)

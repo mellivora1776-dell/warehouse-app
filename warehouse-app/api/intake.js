@@ -68,13 +68,52 @@ export async function handleDocument(req, res, preview) {
       })
     }
     if (preview) return res.status(200).json(data)
+    const { data: check, error: checkError } = await db.rpc(
+      'wm3_preview_token',
+      {
+        p_token: token,
+        p_doc: req.body,
+      },
+    )
+    if (checkError)
+      return res
+        .status(503)
+        .json({
+          document: req.body.document_id,
+          verified: false,
+          error: '저장 후 조회에 실패했습니다. 동일한 문서로 다시 확인하세요.',
+        })
+    if (!check?.duplicate)
+      return res
+        .status(409)
+        .json({
+          document: req.body.document_id,
+          verified: false,
+          error: '현장 확인 완료 · 등록 누락',
+        })
+    const registration = check.registration
+    if (
+      !data.verified ||
+      (data.record_type === 'opening_confirmation'
+        ? !check.can_submit
+        : !registration || registration.differences.length > 0)
+    )
+      return res
+        .status(409)
+        .json({
+          document: req.body.document_id,
+          verified: false,
+          error: '저장된 거래와 확정 자료가 다릅니다.',
+          registration,
+        })
     return res.status(data.duplicate ? 200 : 201).json({
       document: data.id,
       record_type: data.record_type,
-      state: data.status,
+      state: check.status,
+      registration,
       duplicate: data.duplicate,
       stock_posted: false,
-      already_closed: data.already_closed ?? false,
+      already_closed: check.already_closed ?? false,
       verified: data.verified,
       stored_lines: data.stored_lines,
     })

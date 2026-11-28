@@ -28,7 +28,7 @@ export function Review({
   const [item, setItem] = useState({
       id: row.item_id,
       name: row.display_name || row.name,
-      qty: row.qty,
+      qty: row.book_qty ?? row.qty,
     }),
     [search, setSearch] = useState(!row.item_id && row.stock_managed !== false),
     [reg, setReg] = useState(false)
@@ -406,7 +406,7 @@ export function Review({
                     {qty(after.outgoing)}
                   </span>
                   <b>
-                    현재 {qty(item.qty)} → 예상{' '}
+                    장부 {qty(item.qty)} → 예상{' '}
                     {qty(item.qty == null ? null : item.qty + after.net)}
                   </b>
                 </div>
